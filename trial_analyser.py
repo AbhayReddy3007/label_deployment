@@ -56,7 +56,13 @@ The following must NOT be considered secondary indications:
 # BIGQUERY: FETCH TRIAL ROWS
 # ==============================
 def fetch_trial_rows(drug_name: str = DRUG_NAME) -> list[dict]:
-    """Fetches this drug's clinical trial rows from the configured BQ table."""
+    """Fetches this drug's clinical trial rows from the configured BQ table.
+
+    ``drug_name`` must be a single drug name (str), not a list.
+    """
+    if not isinstance(drug_name, str) or not drug_name.strip():
+        raise TypeError(f"fetch_trial_rows() accepts exactly one drug name (str), got: {drug_name!r}")
+
     bq_client = get_bq_client()
     table_id = f"`{PROJECT_ID}.{BQ_DATASET_ID}.{CLINICAL_EFFICACY_TABLE}`"
 
@@ -265,10 +271,18 @@ Return ONLY valid JSON:
 # ENTRY POINT FOR THIS MODULE
 # ==============================
 def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
-    """Runs the full trial-analysis pipeline for ``drug_name``.
+    """Runs the full trial-analysis pipeline for exactly one drug.
 
-    Returns a flat list of row dicts, one per drug/indication/trial.
+    ``drug_name`` must be a single drug name (str) - not a list. To
+    analyse multiple drugs, call this once per drug from the caller.
+
+    Returns a flat list of row dicts, one per indication/trial.
     """
+    if not isinstance(drug_name, str) or not drug_name.strip():
+        raise TypeError(
+            f"trial_analyser.analyse() accepts exactly one drug name (str), got: {drug_name!r}"
+        )
+
     logger.info("[TRIAL_ANALYSER] Starting trial analysis for '%s'", drug_name)
     trial_rows = fetch_trial_rows(drug_name)
     if not trial_rows:
