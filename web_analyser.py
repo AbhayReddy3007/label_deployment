@@ -81,12 +81,20 @@ def _fetch_opportunities(drug_name: str) -> list[dict]:
 # ENTRY POINT FOR THIS MODULE
 # ==============================
 def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
-    """Runs the web-research pipeline for ``drug_name``.
+    """Runs the web-research pipeline for exactly one drug.
+
+    ``drug_name`` must be a single drug name (str) - not a list. To
+    analyse multiple drugs, call this once per drug from the caller.
 
     Returns a flat list of row dicts. Rows have no ``trial_id``/
     ``trial_title``/``phase`` since they aren't sourced from a
     registered trial.
     """
+    if not isinstance(drug_name, str) or not drug_name.strip():
+        raise TypeError(
+            f"web_analyser.analyse() accepts exactly one drug name (str), got: {drug_name!r}"
+        )
+
     logger.info("[WEB_ANALYSER] Starting web research for '%s'", drug_name)
     opportunities = _fetch_opportunities(drug_name)
     if not opportunities:
