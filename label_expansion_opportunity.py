@@ -1,8 +1,10 @@
 """Label Expansion Opportunity — entry point.
 
 Runs Module 1 (``trial_analyser``) and Module 2 (``web_analyser``)
-for the drug configured in ``medical_potential.config``, merges their
-results, and pushes the merged rows to BigQuery.
+for exactly one drug, merges their results, and pushes the merged
+rows to BigQuery. Defaults to the drug configured in
+``medical_potential.config`` (``DRUG_NAME``), but can be called with
+a different single drug name explicitly.
 
 Run with:
     python -m medical_potential.label_expansion_opportunity.label_expansion_opportunity
@@ -26,21 +28,30 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def label_expansion() -> list[dict]:
-    """Runs the full Label Expansion Opportunity pipeline for ``DRUG_NAME``.
+def label_expansion(drug_name: str = DRUG_NAME) -> list[dict]:
+    """Runs the full Label Expansion Opportunity pipeline for exactly one drug.
 
-    Returns the merged, scored rows that were pushed to BigQuery.
+    ``drug_name`` must be a single drug name (str) - not a list. To
+    process multiple drugs, call this once per drug (e.g. loop over
+    drug names at the call site and invoke ``label_expansion`` each time).
+
+    Returns the merged rows that were pushed to BigQuery.
     """
-    logger.info("[LABEL_EXPANSION] Starting Label Expansion Opportunity pipeline for '%s'", DRUG_NAME)
+    if not isinstance(drug_name, str) or not drug_name.strip():
+        raise TypeError(
+            f"label_expansion() accepts exactly one drug name (str), got: {drug_name!r}"
+        )
+
+    logger.info("[LABEL_EXPANSION] Starting Label Expansion Opportunity pipeline for '%s'", drug_name)
 
     logger.info("[LABEL_EXPANSION] Running Module 1: trial_analyser")
-    trial_rows = trial_analyser.analyse(DRUG_NAME)
+    trial_rows = trial_analyser.analyse(drug_name)
 
     logger.info("[LABEL_EXPANSION] Running Module 2: web_analyser")
-    web_rows = web_analyser.analyse(DRUG_NAME)
+    web_rows = web_analyser.analyse(drug_name)
 
     if not trial_rows and not web_rows:
-        logger.warning("[LABEL_EXPANSION] Both modules returned no results for '%s' - nothing to push", DRUG_NAME)
+        logger.warning("[LABEL_EXPANSION] Both modules returned no results for '%s' - nothing to push", drug_name)
         return []
 
     logger.info("[LABEL_EXPANSION] Merging module results")
@@ -49,7 +60,7 @@ def label_expansion() -> list[dict]:
     logger.info("[LABEL_EXPANSION] Pushing %d merged row(s) to BigQuery", len(merged_rows))
     push_to_bq.push_to_bigquery(merged_rows)
 
-    logger.info("[LABEL_EXPANSION] Done. '%s': %d indication(s) processed", DRUG_NAME, len(merged_rows))
+    logger.info("[LABEL_EXPANSION] Done. '%s': %d indication(s) processed", drug_name, len(merged_rows))
     return merged_rows
 
 
