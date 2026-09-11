@@ -24,28 +24,50 @@ logger = logging.getLogger(__name__)
 def merge_results(trial_rows: list[dict], web_rows: list[dict]) -> list[dict]:
     """Merges Module 1 (trial) and Module 2 (web) rows.
 
-    De-duplicates on indication (case-insensitive). When the same
-    indication is found by both modules, the trial-sourced row (which
-    carries registered-trial evidence like phase/trial_id) is kept.
+    De-duplicates on ``(drug_name, indication, trial_id)`` — every
+    trial/indication pair is kept as a separate row.  When the same
+    ``(indication, trial_id)`` appears from both modules, the
+    trial-sourced row is preferred (it carries phase/trial_title).
+    Web-only rows (``trial_id`` is None) are de-duplicated on
+    indication alone so the same web-sourced indication isn't repeated.
     """
-    merged: dict[str, dict] = {}
+    merged: dict[tuple, dict] = {}
 
     for row in trial_rows:
-        key = row["indication"].strip().lower()
+        key = (
+            (row.get("drug_name") or "").strip().lower(),
+            row["indication"].strip().lower(),
+            (row.get("trial_id") or ""),
+        )
         merged[key] = dict(row)
 
     for row in web_rows:
-        key = row["indication"].strip().lower()
+        # Web rows have no trial_id — key on indication alone (with a
+        # sentinel) so we keep one web row per indication at most.
+        key = (
+            (row.get("drug_name") or "").strip().lower(),
+            row["indication"].strip().lower(),
+            "__web__",
+        )
         if key in merged:
             existing = merged[key]
             if not existing.get("source_url") and row.get("source_url"):
                 existing["source_url"] = row["source_url"]
         else:
-            merged[key] = dict(row)
+            # Also skip if a trial row already covers this indication
+            # (any trial_id) — trial evidence is stronger.
+            indication_key = row["indication"].strip().lower()
+            has_trial_row = any(
+                k[1] == indication_key and k[2] != "__web__"
+                for k in merged
+            )
+            if not has_trial_row:
+                merged[key] = dict(row)
 
     merged_rows = list(merged.values())
     logger.info(
-        "[LE_MERGE] Merged %d trial row(s) + %d web row(s) -> %d unique indication row(s)",
+        "[LE_MERGE] Merged %d trial row(s) + %d web row(s) -> %d row(s) "
+        "(unique on drug_name + indication + trial_id)",
         len(trial_rows),
         len(web_rows),
         len(merged_rows),
@@ -92,8 +114,9 @@ def _ensure_table_exists(bq_client: bigquery.Client, table_id: str) -> None:
 def push_to_bigquery(rows: list[dict]) -> None:
     """Upserts merged Label Expansion Opportunity rows into BigQuery.
 
-    ``(drug_name, indication)`` is the unique key: re-running the
-    pipeline updates the existing row instead of appending a duplicate.
+    ``(drug_name, indication, trial_id)`` is the unique key: each
+    trial/indication pair is a separate row. Re-running the pipeline
+    updates existing rows instead of appending duplicates.
     """
     if not rows:
         logger.info("[LE_PUSH] No rows to push - skipping.")
@@ -125,13 +148,14 @@ def push_to_bigquery(rows: list[dict]) -> None:
     merge_query = f"""
         MERGE `{table_id}` T
         USING (SELECT * FROM UNNEST(@rows)) S
-        ON T.drug_name = S.drug_name AND T.indication = S.indication
+        ON T.drug_name = S.drug_name
+           AND T.indication = S.indication
+           AND IFNULL(T.trial_id, '') = IFNULL(S.trial_id, '')
         WHEN MATCHED THEN
             UPDATE SET
                 indication_type = S.indication_type,
                 therapy_area = S.therapy_area,
                 rationale = S.rationale,
-                trial_id = S.trial_id,
                 trial_title = S.trial_title,
                 phase = S.phase,
                 source_url = S.source_url,
@@ -151,7 +175,7 @@ def push_to_bigquery(rows: list[dict]) -> None:
     query_job = bq_client.query(merge_query, job_config=job_config)
     query_job.result()
     logger.info(
-        "[LE_PUSH] Upserted %d row(s) into %s (unique on drug_name + indication)",
+        "[LE_PUSH] Upserted %d row(s) into %s (unique on drug_name + indication + trial_id)",
         len(rows),
         table_id,
     )
