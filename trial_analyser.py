@@ -12,8 +12,6 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from indication_standardizer import standardize_indication
-
 from medical_potential.config import (
     BQ_DATASET_ID,
     CLINICAL_EFFICACY_TABLE,
@@ -381,7 +379,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
 
         seen: set[str] = set()
         for c in conditions:
-            std = standardize_indication(c.get("indication", ""))
+            std = (c.get("indication", "") or "").strip()
             if not std or std.lower() in ("error", "n/a", "no indication found", "none"):
                 continue
             if std.lower() in seen:
