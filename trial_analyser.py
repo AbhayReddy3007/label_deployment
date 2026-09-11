@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 MAX_WORKERS = 10
 TRIAL_EXTRACTION_TIMEOUT_SECONDS = 90
+TRIAL_EXTRACTION_MAX_ATTEMPTS = 2  # retry once on timeout before giving up on a batch
 
 # ==============================
 # BIGQUERY: FETCH TRIAL ROWS
@@ -144,33 +145,47 @@ Rules:
 - Always extract at least the primary indication for each trial
 """
 
-    result_holder: dict = {}
-    error_holder: dict = {}
-
-    def _call_gemini():
-        try:
-            result_holder["text"] = gemini_generate(
-                prompt,
-                system_instruction=(
-                    "You are a clinical trial data assistant. Search for each trial on "
-                    "ClinicalTrials.gov or other registries to get the exact title. "
-                    "Return ONLY valid JSON."
-                ),
-                use_search=True,
-            )
-        except Exception as exc:  # noqa: BLE001
-            error_holder["error"] = exc
+    system_instruction = (
+        "You are a clinical trial data assistant. Search for each trial on "
+        "ClinicalTrials.gov or other registries to get the exact title. "
+        "Return ONLY valid JSON."
+    )
 
     # Larger batches legitimately need more time, so the timeout scales with batch size.
     timeout = TRIAL_EXTRACTION_TIMEOUT_SECONDS * len(rows)
 
-    thread = threading.Thread(target=_call_gemini, daemon=True)
-    thread.start()
-    thread.join(timeout=timeout)
+    result_holder: dict = {}
+    error_holder: dict = {}
+    for attempt in range(1, TRIAL_EXTRACTION_MAX_ATTEMPTS + 1):
+        result_holder.clear()
+        error_holder.clear()
 
-    if thread.is_alive():
-        logger.warning("[TRIAL_ANALYSER] Timeout (>%ss) - skipping trial batch %s", timeout, trial_ids)
-        return [(tid, [], "Skipped (timeout)", "") for tid in trial_ids]
+        def _call_gemini():
+            try:
+                result_holder["text"] = gemini_generate(
+                    prompt, system_instruction=system_instruction, use_search=True,
+                )
+            except Exception as exc:  # noqa: BLE001
+                error_holder["error"] = exc
+
+        thread = threading.Thread(target=_call_gemini, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+
+        if not thread.is_alive():
+            break  # got a response (success or error) within the timeout
+
+        if attempt < TRIAL_EXTRACTION_MAX_ATTEMPTS:
+            logger.warning(
+                "[TRIAL_ANALYSER] Timeout (>%ss) on attempt %d/%d for trial batch %s - retrying",
+                timeout, attempt, TRIAL_EXTRACTION_MAX_ATTEMPTS, trial_ids,
+            )
+        else:
+            logger.warning(
+                "[TRIAL_ANALYSER] Timeout (>%ss) on attempt %d/%d for trial batch %s - giving up",
+                timeout, attempt, TRIAL_EXTRACTION_MAX_ATTEMPTS, trial_ids,
+            )
+            return [(tid, [], "Skipped (timeout)", "") for tid in trial_ids]
 
     if "error" in error_holder:
         logger.warning("[TRIAL_ANALYSER] Extraction failed for trial batch %s: %s", trial_ids, error_holder["error"])
@@ -414,9 +429,29 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
                 extractions.append((trial_id, conditions, trial_title, extracted_phase, row))
 
     flat_rows: list[dict] = []
+    skipped_trials: list[str] = []
     for trial_id, conditions, trial_title, extracted_phase, row in extractions:
         phase = row.get("phase") or extracted_phase or ""
         if not conditions:
+            # Every trial should produce at least one row. If extraction
+            # returned nothing (timeout, parse error, Gemini omission),
+            # create a placeholder so the trial still appears in the output.
+            logger.warning(
+                "[TRIAL_ANALYSER] Trial %s returned no indications - creating placeholder row",
+                trial_id,
+            )
+            skipped_trials.append(str(trial_id))
+            flat_rows.append(
+                {
+                    "drug_name": row.get("molecule_name") or drug_name,
+                    "indication": "Unknown (extraction failed)",
+                    "rationale": f"No indications could be extracted. Trial title: {trial_title}",
+                    "trial_title": trial_title,
+                    "trial_id": trial_id,
+                    "phase": phase,
+                    "source_url": row.get("source_url"),
+                }
+            )
             continue
 
         seen: set[str] = set()
@@ -438,6 +473,12 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
                     "source_url": row.get("source_url"),
                 }
             )
+
+    if skipped_trials:
+        logger.warning(
+            "[TRIAL_ANALYSER] %d trial(s) had no indications extracted: %s",
+            len(skipped_trials), ", ".join(skipped_trials),
+        )
 
     unique_indications = sorted({r["indication"] for r in flat_rows})
     classification_map = _classify_indications(drug_name, unique_indications)
