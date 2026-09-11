@@ -1,13 +1,33 @@
-"""Indication extractor sub-package.
+"""Web data extraction module for Dimension 5 serious safety profile.
 
-Holds the two research modules that find candidate label-expansion
-indications for a drug, plus their shared Gemini utilities:
-
-- ``indication_research`` — shared Gemini client, ``gemini_generate()``,
-  ``extract_json()``, and the ``SECONDARY_INDICATION_CRITERIA`` prompt text
-  used by both modules below.
-- ``trial_analyser``  — Module 1: mines registered clinical trials
-  (read from BigQuery) for indications and their trial phase.
-- ``web_analyser``    — Module 2: uses Gemini + Google Search to find
-  label-expansion signals directly from public web sources.
+Handles data collection from clinical trials, regulatory sources, and post-marketing
+evidence using grounded Gemini calls.
 """
+
+from .helper_functions import (
+    determine_approval_market_status,
+    extract_incremental_trials,
+    extract_serious_safety_data,
+    identify_regulatory_impact,
+    identify_post_marketing_safety,
+)
+from .sae_categorization import (
+    summarize_sae_across_trials,
+    classify_sae_expectedness_and_category,
+    update_existing_sae_events_in_table,
+    update_new_sae_events_to_summary_table,
+)
+from .trial_level_weight_calculator import calculate_trial_weights_and_agg_sae
+
+__all__ = [
+    "determine_approval_market_status",
+    "extract_incremental_trials",
+    "extract_serious_safety_data",
+    "identify_regulatory_impact",
+    "identify_post_marketing_safety",
+    "summarize_sae_across_trials",
+    "classify_sae_expectedness_and_category",
+    "update_existing_sae_events_in_table",
+    "update_new_sae_events_to_summary_table",
+    "calculate_trial_weights_and_agg_sae",
+]
