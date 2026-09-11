@@ -66,6 +66,19 @@ def fetch_trial_rows(drug_name: str = DRUG_NAME) -> list[dict]:
 # ==============================
 # GEMINI: EXTRACT INDICATIONS PER BATCH OF TRIALS
 # ==============================
+def _clean_trial_id(trial_id) -> str:
+    """Strips a trailing parenthetical annotation from a trial ID, e.g.
+    'NCT06929156 (BGMxxxx)' -> 'NCT06929156'. Only the registry ID (before
+    the parenthesis) should be used for searching ClinicalTrials.gov - the
+    parenthetical part is an internal/company code, not part of the ID.
+    """
+    s = str(trial_id or "").strip()
+    paren_idx = s.find("(")
+    if paren_idx != -1:
+        s = s[:paren_idx].strip()
+    return s
+
+
 def _extract_trial_batch(rows: list[dict]) -> list[tuple[str, list[dict], str, str]]:
     """Extracts indications, exact trial title and phase for a batch of trials.
 
@@ -77,7 +90,7 @@ def _extract_trial_batch(rows: list[dict]) -> list[tuple[str, list[dict], str, s
 
     trials_block = "\n\n".join(
         f"Trial {i + 1}:\n"
-        f"Trial ID: {r.get('trial_id')}\n"
+        f"Trial ID: {_clean_trial_id(r.get('trial_id'))}\n"
         f"Molecule: {r.get('molecule_name')}\n"
         f"Company: {r.get('company_name')}\n"
         f"Phase: {r.get('phase')}\n"
@@ -169,10 +182,10 @@ Rules:
         raw_trials = [t for t in raw_trials if isinstance(t, dict)]
 
         def _norm(tid) -> str:
-            # Tolerates whitespace, case, and punctuation differences (e.g.
-            # "NCT01234567" vs "nct-01234567 ") so a reformatted trial_id
-            # from Gemini still matches the one we sent it.
-            return re.sub(r"[^A-Za-z0-9]", "", str(tid or "")).upper()
+            # Tolerates whitespace, case, punctuation, and a parenthetical
+            # company-code suffix (e.g. "NCT01234567 (BGMxxxx)") so a
+            # reformatted or annotated trial_id still matches the one we sent.
+            return re.sub(r"[^A-Za-z0-9]", "", _clean_trial_id(tid)).upper()
 
         by_trial_id = {_norm(t.get("trial_id")): t for t in raw_trials}
 
