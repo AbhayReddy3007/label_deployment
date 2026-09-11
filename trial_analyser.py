@@ -9,6 +9,7 @@ indication as Primary/Secondary with a therapy area.
 from __future__ import annotations
 
 import logging
+import re
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -165,12 +166,40 @@ Rules:
     try:
         data = extract_json(result_holder.get("text", ""))
         raw_trials = data.get("trials", []) if isinstance(data, dict) else []
-        by_trial_id = {str(t.get("trial_id")): t for t in raw_trials if isinstance(t, dict)}
+        raw_trials = [t for t in raw_trials if isinstance(t, dict)]
+
+        def _norm(tid) -> str:
+            # Tolerates whitespace, case, and punctuation differences (e.g.
+            # "NCT01234567" vs "nct-01234567 ") so a reformatted trial_id
+            # from Gemini still matches the one we sent it.
+            return re.sub(r"[^A-Za-z0-9]", "", str(tid or "")).upper()
+
+        by_trial_id = {_norm(t.get("trial_id")): t for t in raw_trials}
+
+        if len(raw_trials) < len(rows):
+            logger.warning(
+                "[TRIAL_ANALYSER] Batch %s: requested %d trial(s) but Gemini returned only %d entr(y/ies) - "
+                "likely truncated (batch too large) or partially dropped",
+                trial_ids, len(rows), len(raw_trials),
+            )
 
         results: list[tuple[str, list[dict], str, str]] = []
-        for row in rows:
+        for i, row in enumerate(rows):
             trial_id = row.get("trial_id")
-            entry = by_trial_id.get(str(trial_id))
+            entry = by_trial_id.get(_norm(trial_id))
+
+            # Fallback: if there's no normalized-ID match but the response has
+            # an entry at the same position, use it (the prompt requires
+            # Gemini to preserve input order even if it garbles the ID text).
+            if not entry and i < len(raw_trials):
+                candidate = raw_trials[i]
+                logger.warning(
+                    "[TRIAL_ANALYSER] Trial %s: no ID match in Gemini's response (got trial_id=%r at "
+                    "position %d) - using positional fallback",
+                    trial_id, candidate.get("trial_id"), i,
+                )
+                entry = candidate
+
             if not entry:
                 logger.warning("[TRIAL_ANALYSER] No result returned for trial %s in batch", trial_id)
                 results.append((trial_id, [], "N/A (missing from batch response)", ""))
