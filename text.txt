@@ -1,0 +1,140 @@
+[OK]  Gemini Model initialised (key: ...Y-Yz9Q) | max concurrent calls: 5
+<frozen runpy>:128: RuntimeWarning: 'medical_potential.label_expansion_opportunity.label_expansion_opportunity' found in sys.modules after import of package 'medical_potential.label_expansion_opportunity', but prior to execution of 'medical_potential.label_expansion_opportunity.label_expansion_opportunity'; this may result in unpredictable behaviour
+[INFO] [LABEL_EXPANSION] Starting Label Expansion Opportunity pipeline for 'Bgm-0504'
+[INFO] [LABEL_EXPANSION] Running Module 1: trial_analyser
+[INFO] [TRIAL_ANALYSER] Starting trial analysis for 'Bgm-0504'
+[INFO] [TRIAL_ANALYSER] Retrieved 43 trial row(s) for 'Bgm-0504' from `cognito-dev-380506.data_mart.clinical_efficacy`
+[INFO] [TRIAL_ANALYSER] Extracting indications from 43 trial(s) in batches of 1, using 5 workers
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06716216 (GLORY-2): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07166081: Healthy Subjects, Overweight, Obese
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06704581 (STRENGTH-1): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07382908: Overweight, Obese
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] [TRIAL_ANALYSER] NCT07166081 (BGM0504 Oral-P1-CPK01-US): Healthy Subjects, Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06716203 (GLORY-1): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06929156: Healthy Subjects, Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07566572: Healthy Subjects, Overweight, Obese
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06714955: Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] ChiCTR2400090362 (N/A): Overweight, Obesity
+[INFO] [TRIAL_ANALYSER] NCT06920056 (BGM0504-DDI): Healthy Subjects, Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07566572 (BGM0504-CPK-102): Healthy Subjects, Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06716216 (BGM0504-III-T2DM-02): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06716203 (BGM0504-III-T2DM-01): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07064486 (BGM0504-III-T2DM-02-IDN): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06929156 (BGM0504-I-101): Healthy Subjects, Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06920056 (BGM0504-302): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06974825: Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06974825 (BGM0504-IIa-T2DM): Type 2 Diabetes, Overweight or Obesity, Dyslipidemia, Hypertension
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06716203 (BGM0504-301): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT05725512: Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06911203 (BGM0504-II-WL-02): Overweight or Obese
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07239973 (BGM0504 Oral Phase 1 China): Healthy Subjects, Overweight, Obese
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06973681 (BGM0504-II-WL): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07239973 (BGM0504-CPK-101): Healthy Subjects, Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06704581 (BGM0504-303): Overweight, Obese
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07239973 (BGM0504-311): Overweight or Obese
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06973681 (BGM0504-306): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06929156 (BGM0504-305): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] ChiCTR2400090362 (BGM0504-III-WL): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06704581 (BGM0504-III-WL): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07382908 (BGM0504-BE): Healthy Subjects, Overweight, Obese
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06973681: Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07064486 (BGM0504-Ⅲ-T2DM-02-IDN): Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06714955 (BGM0504-P1-001-US): Healthy Subjects, Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06716203: Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06716216: Overweight, Obese, Weight Management, Metabolic Health (Glycemic and Lipid Control), Cardiovascular Risk Reduction (Blood Pressure)
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07566572 (BGM0504 Tablet PK Study): Healthy Subjects, Overweight, Obesity
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT06704581 (BGM0504-Ⅲ-WL): Overweight, Obesity
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [TRIAL_ANALYSER] NCT07658560 (BGM0504 Tablet Phase 2 Obesity): Overweight, Obesity
+[WARNING] [TRIAL_ANALYSER] Timeout (>90s) - skipping trial batch ['NCT07382908 (N/A)']
+[WARNING] [TRIAL_ANALYSER] Timeout (>90s) - skipping trial batch ['NCT06974825 (BGM0504-307)']
+[WARNING] [TRIAL_ANALYSER] Timeout (>90s) - skipping trial batch ['NCT07064486 (BGM0504-308)']
+[INFO] [TRIAL_ANALYSER] Classifying 12 unique indication(s) in 1 batch(es) of up to 20
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [UTILS] Empty/failed response with Search grounding — retrying without grounding
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
