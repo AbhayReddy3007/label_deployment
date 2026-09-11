@@ -450,6 +450,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
                     "trial_id": trial_id,
                     "phase": phase,
                     "source_url": row.get("source_url"),
+                    "data_source": "Trials",
                 }
             )
             continue
@@ -471,6 +472,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
                     "trial_id": trial_id,
                     "phase": phase,
                     "source_url": row.get("source_url"),
+                    "data_source": "Trials",
                 }
             )
 
