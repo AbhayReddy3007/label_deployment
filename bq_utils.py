@@ -88,6 +88,7 @@ LE_RESULTS_SCHEMA: list[bigquery.SchemaField] = [
     bigquery.SchemaField("trial_title", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("phase", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("source_url", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("data_source", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("created_at", "TIMESTAMP", mode="NULLABLE"),
     bigquery.SchemaField("updated_at", "TIMESTAMP", mode="NULLABLE"),
 ]
@@ -140,6 +141,7 @@ def push_to_bigquery(rows: list[dict]) -> None:
             bigquery.ScalarQueryParameter("trial_title", "STRING", r.get("trial_title")),
             bigquery.ScalarQueryParameter("phase", "STRING", r.get("phase")),
             bigquery.ScalarQueryParameter("source_url", "STRING", r.get("source_url")),
+            bigquery.ScalarQueryParameter("data_source", "STRING", r.get("data_source")),
             bigquery.ScalarQueryParameter("updated_at", "TIMESTAMP", now),
         )
         for r in rows
@@ -159,13 +161,14 @@ def push_to_bigquery(rows: list[dict]) -> None:
                 trial_title = S.trial_title,
                 phase = S.phase,
                 source_url = S.source_url,
+                data_source = S.data_source,
                 updated_at = S.updated_at
         WHEN NOT MATCHED THEN
             INSERT (drug_name, indication, indication_type, therapy_area, rationale,
-                    trial_id, trial_title, phase, source_url,
+                    trial_id, trial_title, phase, source_url, data_source,
                     created_at, updated_at)
             VALUES (S.drug_name, S.indication, S.indication_type, S.therapy_area, S.rationale,
-                    S.trial_id, S.trial_title, S.phase, S.source_url,
+                    S.trial_id, S.trial_title, S.phase, S.source_url, S.data_source,
                     S.updated_at, S.updated_at)
     """
 
