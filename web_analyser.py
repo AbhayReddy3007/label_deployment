@@ -117,6 +117,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
                 "source_url": opp.get("source_url") or None,
                 "indication_type": opp.get("indication_type", "Secondary"),
                 "therapy_area": opp.get("therapy_area", "Other"),
+                "data_source": "Web",
             }
         )
 
