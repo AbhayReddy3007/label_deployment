@@ -1,35 +1,40 @@
-"""Open Targets mapping — MOA → OT target resolution.
+"""Open Targets mapping — Indication → OT disease resolution.
 
-Fetches the Mechanism_of_Action for a drug from BigQuery, resolves each
-MOA to its Open Targets target name using a two-phase approach:
+Fetches indications from the Label Expansion ``LE_TABLE`` in BigQuery,
+resolves each to its Open Targets disease entity (EFO/MONDO ID + name)
+using a multi-path approach:
 
-  Phase 1 (deterministic): extract candidate gene search terms from the
-      MOA string and query the OT target search API.
-  Phase 2 (LLM fallback):  ask Gemini + Google Search for the Ensembl ID
-      or HGNC symbol, then verify against OT.
+  Path A (Gemini semantic matching): if ``target_ensembl_ids`` are
+      provided, fetches the full OT disease list for those targets and
+      asks Gemini to semantically match indications against it.
+  Path B (OT text search fallback): progressive search with synonym
+      expansion, parenthetical stripping, and term shortening.
 
-Already-resolved MOAs (present in ``OT_MOA_TABLE``) are skipped so only
-new values hit the API.
+Already-resolved indications (present in ``OT_DISEASE_TABLE``) are
+skipped so only new values hit the API.
 
-Resolved mappings are pushed to ``PROJECT_ID.BQ_DATASET_ID.OT_MOA_TABLE``
-with columns ``moa`` and ``ot_moa``.
+Resolved mappings are pushed to ``PROJECT_ID.BQ_DATASET_ID.OT_DISEASE_TABLE``
+with columns ``indication`` and ``ot_disease``.
 """
 
 from __future__ import annotations
 
 import logging
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from google.cloud import bigquery
 
-from medical_potential.config import BQ_DATASET_ID, DRUG_NAME, PROJECT_ID
+from medical_potential.config import BQ_DATASET_ID, DRUG_NAME, LE_TABLE, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
 from .ot_utils import (
-    OT_MOA_TABLE,
+    OT_DISEASE_TABLE,
     fetch_existing_mappings,
     gemini_call,
     ot_post,
+    parse_json_response,
     push_mappings,
 )
 
@@ -38,231 +43,443 @@ logger = logging.getLogger(__name__)
 # ==============================
 # BQ SCHEMA
 # ==============================
-OT_MOA_SCHEMA: list[bigquery.SchemaField] = [
-    bigquery.SchemaField("moa", "STRING", mode="REQUIRED"),
-    bigquery.SchemaField("ot_moa", "STRING", mode="NULLABLE"),
+OT_DISEASE_SCHEMA: list[bigquery.SchemaField] = [
+    bigquery.SchemaField("indication", "STRING", mode="REQUIRED"),
+    bigquery.SchemaField("ot_disease", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("ot_disease_id", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("created_at", "TIMESTAMP", mode="NULLABLE"),
     bigquery.SchemaField("updated_at", "TIMESTAMP", mode="NULLABLE"),
 ]
 
 # ==============================
-# MOA TERM EXTRACTION
+# CONSTANTS
 # ==============================
-ACTION_WORDS = {
-    "Agonist", "Antagonist", "Activator", "Inhibitor",
-    "Modulator", "Blocker", "Stimulator", "Suppressor",
+_DISEASE_CHUNK_SIZE = 200
+_WORKERS = 3
+
+_MEASUREMENT_PREFIXES = ("measurement", "process", "risk measurement", "risk factor")
+
+MEDICAL_SYNONYMS: dict[str, list[str]] = {
+    "hfpef":         ["heart failure with preserved ejection fraction", "heart failure"],
+    "hfref":         ["heart failure with reduced ejection fraction", "heart failure"],
+    "nafld":         ["non-alcoholic fatty liver disease",
+                      "metabolic dysfunction-associated steatotic liver disease"],
+    "nash":          ["non-alcoholic steatohepatitis",
+                      "metabolic dysfunction-associated steatohepatitis"],
+    "mash":          ["metabolic dysfunction-associated steatohepatitis",
+                      "non-alcoholic steatohepatitis"],
+    "masld":         ["metabolic dysfunction-associated steatotic liver disease",
+                      "non-alcoholic fatty liver disease"],
+    "mace":          ["major adverse cardiovascular event", "cardiovascular disease"],
+    "dyslipidemia":  ["dyslipidaemia", "hyperlipidemia"],
+    "dyslipidaemia": ["dyslipidemia", "hyperlipidaemia"],
+    "ckd":           ["chronic kidney disease"],
+    "copd":          ["chronic obstructive pulmonary disease"],
+    "osa":           ["obstructive sleep apnea"],
+    "t2dm":          ["type 2 diabetes mellitus"],
+    "t1dm":          ["type 1 diabetes mellitus"],
+    "t2d":           ["type 2 diabetes mellitus"],
+    "aud":           ["alcohol use disorder"],
+    "pcos":          ["polycystic ovary syndrome"],
+    "ibs":           ["irritable bowel syndrome"],
+    "ra":            ["rheumatoid arthritis"],
+    "sle":           ["systemic lupus erythematosus"],
+    "ms":            ["multiple sclerosis"],
+    "als":           ["amyotrophic lateral sclerosis"],
+    "chf":           ["congestive heart failure", "heart failure"],
+    "mi":            ["myocardial infarction"],
+    "af":            ["atrial fibrillation"],
+    "pad":           ["peripheral artery disease"],
+    "htn":           ["hypertension"],
+    "cad":           ["coronary artery disease"],
+    "cvd":           ["cardiovascular disease"],
+    "gerd":          ["gastroesophageal reflux disease"],
+    "ibd":           ["inflammatory bowel disease"],
+    "uc":            ["ulcerative colitis"],
+    "cd":            ["Crohn disease"],
+    "ad":            ["Alzheimer disease"],
+    "pd":            ["Parkinson disease"],
+    "mdd":           ["major depressive disorder"],
+    "adhd":          ["attention deficit hyperactivity disorder"],
+    "oa":            ["osteoarthritis"],
+    "bmi":           ["body mass index", "obesity"],
 }
 
 
-def extract_gene_search_terms(moa: str) -> list[str]:
-    """Extract candidate gene/target search terms from a MOA description.
-
-    Strategies (in order):
-      1. Symbol in parentheses — ``Calcitonin Receptor (CALCR) Agonist`` → ``["CALCR"]``
-      2. Hyphenated/numeric acronym — ``GLP-1 Receptor Agonist`` → ``["GLP-1"]``
-      3. All-caps standalone acronym — ``GIPR Agonist`` → ``["GIPR"]``
-      4. Strip action word from end → protein description
-      5. Raw MOA string as last resort
-    """
-    terms: list[str] = []
-
-    # Strategy 1: symbol inside parentheses
-    m = re.search(r"\(([A-Z][A-Z0-9\-]+)\)", moa)
-    if m:
-        terms.append(m.group(1))
-
-    # Strategy 2: hyphenated/numeric acronym
-    m = re.search(r"\b([A-Z]{2,}[\-]\d+[A-Z]*)\b", moa)
-    if m:
-        terms.append(m.group(1))
-
-    # Strategy 3: all-caps standalone acronym (3+ chars)
-    for word in moa.split():
-        clean = re.sub(r"[^A-Z0-9]", "", word)
-        if re.fullmatch(r"[A-Z]{3,}\d*", clean) and word.rstrip(".,;") not in ACTION_WORDS:
-            terms.append(clean)
-            break
-
-    # Strategy 4: strip action word from end
-    stripped = re.sub(
-        r"\s+(" + "|".join(ACTION_WORDS) + r")\s*$", "", moa, flags=re.IGNORECASE,
-    ).strip()
-    stripped = re.sub(r"\s*\(.*?\)", "", stripped).strip()
-    if stripped and stripped != moa:
-        terms.append(stripped)
-
-    # Strategy 5: raw MOA string
-    if moa not in terms:
-        terms.append(moa)
-
-    # Deduplicate preserving order
-    seen: set[str] = set()
-    result: list[str] = []
-    for t in terms:
-        if t and t not in seen:
-            seen.add(t)
-            result.append(t)
-    return result
+# ==============================
+# NORMALIZATION
+# ==============================
+def normalize_indication(ind: str) -> str:
+    """Canonical form so spelling variants map to the same key.
+    ``'Pre-diabetes'``, ``'Prediabetes'`` → ``'prediabetes'``."""
+    s = ind.strip()
+    s = re.sub(r"\s+", " ", s).lower()
+    s = re.sub(r"(?<=\w)-(?=\w)", "", s)
+    return re.sub(r"\s+", " ", s).strip()
 
 
 # ==============================
-# OT TARGET SEARCH (Phase 1)
+# OT DISEASE SEARCH
 # ==============================
-def ot_search_target(term: str) -> tuple[str | None, str | None, str | None]:
-    """Query OT target search for a given term.
-    Returns ``(ensembl_id, approved_symbol, approved_name)`` or ``(None, None, None)``."""
-    query = """
-    query SearchTarget($q: String!) {
-      search(queryString: $q, entityNames: ["target"], page: {index: 0, size: 3}) {
+def _is_disease_hit(name: str | None) -> bool:
+    if not name:
+        return False
+    lower = name.lower()
+    return not any(prefix in lower for prefix in _MEASUREMENT_PREFIXES)
+
+
+def ot_search_disease(name: str) -> tuple[str | None, str | None]:
+    """Search OT for a disease by name. Returns ``(disease_id, disease_name)``."""
+    graphql = """
+    query SearchDisease($q: String!) {
+      search(queryString: $q, entityNames: ["disease"], page: {index: 0, size: 5}) {
         hits {
           id
-          object { ... on Target { approvedSymbol approvedName } }
+          object { ... on Disease { name } }
         }
       }
     }
     """
-    data = ot_post(query, {"q": term}, context=f"target-search:{term}")
-    if data:
-        hits = data.get("search", {}).get("hits", [])
-        if hits:
-            h = hits[0]
-            return (
-                h["id"],
-                h["object"].get("approvedSymbol"),
-                h["object"].get("approvedName"),
-            )
-    return None, None, None
+    search_queries = [name]
+    name_lower = name.lower()
+    if "emia" in name_lower:
+        search_queries.append(re.sub(r"emia\b", "aemia", name, flags=re.IGNORECASE))
+    elif "aemia" in name_lower:
+        search_queries.append(re.sub(r"aemia\b", "emia", name, flags=re.IGNORECASE))
+    if len(name.split()) == 1 and not name.startswith('"'):
+        search_queries.append(f'"{name}"')
+
+    all_candidates: list[tuple[str, str]] = []
+    seen_ids: set[str] = set()
+    for sq in search_queries:
+        data = ot_post(graphql, {"q": sq}, context=f"disease-search:{sq}")
+        if data:
+            for h in data.get("search", {}).get("hits", []):
+                hid = h["id"]
+                if hid not in seen_ids:
+                    seen_ids.add(hid)
+                    all_candidates.append((hid, h["object"].get("name", "")))
+
+    if not all_candidates:
+        return None, None
+
+    # Score candidates
+    query_words = set(re.findall(r"[a-z]{3,}", name.lower()))
+    best_id, best_name, best_score = None, None, -999.0
+
+    for rank, (cid, cname) in enumerate(all_candidates):
+        score = 0.0
+        cname_lower = (cname or "").lower()
+        query_lower = name.lower().strip()
+
+        if _is_disease_hit(cname):
+            score += 100
+        if cname_lower == query_lower:
+            score += 50
+        elif re.sub(r"aemia\b", "emia", cname_lower) == query_lower:
+            score += 50
+
+        hit_words = set(re.findall(r"[a-z]{3,}", cname_lower))
+        score += len(query_words & hit_words) * 5
+        score -= len(hit_words - query_words) * 2
+        score -= rank * 0.1
+
+        if score > best_score:
+            best_score = score
+            best_id, best_name = cid, cname
+
+    return best_id, best_name
 
 
 # ==============================
-# GEMINI FALLBACK (Phase 2)
+# FALLBACK SEARCH TERMS
 # ==============================
-def _extract_ensg(text: str) -> str | None:
-    m = re.search(r"ENSG\d{11}", text)
-    return m.group() if m else None
+def _fallback_search_terms(ind: str) -> list[str]:
+    """Generate progressively simpler OT search terms for an indication."""
+    terms: list[str] = []
+    ind_lower = ind.strip().lower()
+    paren_match = re.search(r"\(([^)]+)\)", ind)
+    paren_base = re.sub(r"\s*\(.*?\)", "", ind).strip()
 
+    # Synonym expansion
+    for candidate in [ind_lower, paren_base.lower()]:
+        if candidate in MEDICAL_SYNONYMS:
+            terms.extend(MEDICAL_SYNONYMS[candidate])
+    if paren_match:
+        acronym = paren_match.group(1).strip().lower()
+        if acronym in MEDICAL_SYNONYMS:
+            terms.extend(MEDICAL_SYNONYMS[acronym])
 
-def _extract_symbol(text: str) -> str | None:
-    m = re.search(r"(?:symbol|gene)[:\s]+([A-Z][A-Z0-9]{1,9})\b", text, re.IGNORECASE)
-    if m:
-        return m.group(1)
-    noise = {"ENSG", "HGNC", "URL", "API", "FDA", "EMA", "THE", "AND", "FOR"}
-    for c in re.findall(r"\b([A-Z][A-Z0-9]{2,9})\b", text):
-        if c not in noise and not c.startswith("ENSG"):
-            return c
-    return None
+    # Strip parentheticals
+    if paren_base and paren_base != ind:
+        terms.append(paren_base)
 
+    base = paren_base if paren_base else ind
 
-def gemini_resolve_moa(moa: str) -> tuple[str | None, str | None, str | None]:
-    """Use Gemini + Google Search to find the primary gene target for a MOA.
+    # Strip action words
+    action_re = r"\b(reduction|risk\s+reduction|outcomes|risk|prevention|increased|decreased)\b"
+    cleaned = re.sub(action_re, "", base, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"\s*/\s*", " ", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if cleaned and cleaned.lower() != base.lower() and len(cleaned) > 1:
+        terms.append(cleaned)
+        if cleaned.lower() in MEDICAL_SYNONYMS:
+            terms.extend(MEDICAL_SYNONYMS[cleaned.lower()])
 
-    1. Ask for the Ensembl ID → verify against OT.
-    2. If that fails, ask for the HGNC gene symbol → search OT.
+    # Slash handling
+    slashed = re.sub(r"\s*/\s*", " ", base).strip()
+    slashed = re.sub(r"\s+", " ", slashed).strip()
+    if slashed != base:
+        terms.append(slashed)
+        base = slashed
 
-    Returns ``(ensembl_id, approved_symbol, approved_name)`` or ``(None, None, None)``.
-    """
-    logger.info("[MOA_MAPPING] Gemini fallback for '%s'", moa)
+    # Dehyphenate
+    dehyphen = re.sub(r"(?<=[A-Za-z])-(?=[A-Za-z])", " ", base).strip()
+    if dehyphen != base:
+        terms.append(dehyphen)
+        base = dehyphen
 
-    # Ask 1: ENSG ID
-    prompt_ensg = (
-        f'Search OpenTargets Platform (platform.opentargets.org) for the primary '
-        f'gene target of the mechanism of action: "{moa}".\n'
-        f'Return ONLY the Ensembl gene ID in the format ENSGXXXXXXXXXXX '
-        f'(11 digits after ENSG). No other text.'
-    )
-    text = gemini_call(prompt_ensg, max_tokens=512)
-    ensg = _extract_ensg(text)
-    if ensg:
-        eid, sym, name = ot_search_target(ensg)
-        if eid:
-            logger.info("[MOA_MAPPING] Gemini→OT verified: %s | %s | %s", eid, sym, name)
-            return eid, sym, name
-        logger.warning("[MOA_MAPPING] OT could not verify ENSG %s — trying symbol fallback", ensg)
+    # Progressive shortening
+    words = base.split()
+    if len(words) > 3:
+        terms.append(" ".join(words[:3]))
+    if len(words) > 2:
+        terms.append(" ".join(words[:2]))
+    if len(words) > 1:
+        terms.append(words[0])
 
-    # Ask 2: gene symbol
-    prompt_sym = (
-        f'What is the official HGNC gene symbol of the primary protein target '
-        f'for the drug mechanism: "{moa}"?\n'
-        f'Examples: GLP1R for GLP-1 Receptor Agonist, GIPR for GIP Receptor Agonist.\n'
-        f'Return ONLY the gene symbol. No other text.'
-    )
-    text2 = gemini_call(prompt_sym, max_tokens=512)
-    symbol = _extract_symbol(text2)
-    if symbol:
-        eid, sym, name = ot_search_target(symbol)
-        if eid:
-            logger.info("[MOA_MAPPING] Gemini→Symbol→OT: %s | %s | %s", eid, sym, name)
-            return eid, sym, name
-        logger.warning("[MOA_MAPPING] OT could not find symbol '%s'", symbol)
-
-    logger.warning("[MOA_MAPPING] Gemini fallback exhausted for '%s'", moa)
-    return None, None, None
+    # Deduplicate, exclude original
+    seen = {ind.lower()}
+    return [t for t in terms if t and t.lower() not in seen and not seen.add(t.lower())]
 
 
 # ==============================
-# MASTER RESOLVER
+# OT TEXT SEARCH FALLBACK (Path B)
 # ==============================
-def resolve_single_moa(moa: str) -> dict:
-    """Resolve one MOA string to an OT target via Phase 1 then Phase 2.
+def _resolve_via_ot_search(ind: str) -> tuple[str | None, str | None]:
+    """Resolve one indication via progressive OT text search."""
+    search_terms = [ind] + _fallback_search_terms(ind)
+    candidates: list[tuple[str, str, str]] = []
 
-    Returns a dict with keys: ``moa``, ``ot_moa``, ``ensembl_id``,
-    ``approved_symbol``, ``resolution_path``.
-    """
-    search_terms = extract_gene_search_terms(moa)
-    logger.info("[MOA_MAPPING] Resolving '%s' — search terms: %s", moa, search_terms)
-
-    # Phase 1: deterministic OT search
     for term in search_terms:
-        ensembl_id, symbol, name = ot_search_target(term)
-        if ensembl_id:
-            logger.info("[MOA_MAPPING] OT search hit for '%s' → %s | %s | %s", moa, ensembl_id, symbol, name)
-            return {
-                "moa": moa,
-                "ot_moa": name,
-                "ensembl_id": ensembl_id,
-                "approved_symbol": symbol,
-                "resolution_path": "ot_search",
-            }
+        ot_id, ot_name = ot_search_disease(term)
+        if not ot_id:
+            continue
+        candidates.append((term, ot_id, ot_name))
+        if (ot_name or "").lower().strip() == ind.lower().strip():
+            break
 
-    # Phase 2: Gemini fallback
-    ensembl_id, symbol, name = gemini_resolve_moa(moa)
-    if ensembl_id:
-        return {
-            "moa": moa,
-            "ot_moa": name,
-            "ensembl_id": ensembl_id,
-            "approved_symbol": symbol,
-            "resolution_path": "gemini_fallback",
+    if not candidates:
+        return None, None
+
+    # Score candidates
+    ind_words = set(re.findall(r"[a-z]{3,}", ind.lower()))
+    best_id, best_name, best_score = None, None, -999.0
+
+    for term_used, cid, cname in candidates:
+        score = 0.0
+        cname_lower = (cname or "").lower().strip()
+        ind_lower_s = ind.lower().strip()
+
+        if cname_lower == ind_lower_s:
+            score += 200
+        elif re.sub(r"aemia\b", "emia", cname_lower) == ind_lower_s:
+            score += 200
+
+        if _is_disease_hit(cname):
+            score += 100
+
+        hit_words = set(re.findall(r"[a-z]{3,}", cname_lower))
+        score += len(ind_words & hit_words) * 5
+        extra = len(hit_words - ind_words)
+        score -= extra * 4
+
+        if score > best_score:
+            best_score = score
+            best_id, best_name = cid, cname
+
+    return best_id, best_name
+
+
+# ==============================
+# GEMINI SEMANTIC MATCHING (Path A)
+# ==============================
+def fetch_all_target_diseases(
+    target_ids: list[str],
+    page_size: int = 50,
+) -> list[tuple[str, str]]:
+    """Paginate through OT to get ALL diseases associated with the given targets."""
+    query = """
+    query TargetDiseases($targetId: String!, $index: Int!, $size: Int!) {
+      target(ensemblId: $targetId) {
+        associatedDiseases(page: { index: $index, size: $size }) {
+          count
+          rows { disease { id name } }
         }
-
-    logger.warning("[MOA_MAPPING] Unresolved: '%s'", moa)
-    return {
-        "moa": moa,
-        "ot_moa": None,
-        "ensembl_id": None,
-        "approved_symbol": None,
-        "resolution_path": "unresolved",
+      }
     }
-
-
-# ==============================
-# FETCH MOA FROM BQ
-# ==============================
-def fetch_moa_for_drug(drug_name: str, drug_details_table: str) -> list[str]:
-    """Fetches the distinct Mechanism_of_Action values for a drug from BQ.
-
-    Returns a list of individual MOA strings (split on ``'; '``).
     """
+    seen: set[str] = set()
+    all_diseases: list[tuple[str, str]] = []
+
+    for tid in target_ids:
+        if not tid:
+            continue
+        page_index = 0
+        total = None
+        fetched = 0
+        while True:
+            data = ot_post(
+                query,
+                {"targetId": tid, "index": page_index, "size": page_size},
+                context=f"target-diseases:{tid}:p{page_index}",
+            )
+            if not data:
+                break
+            assoc = data.get("target", {}).get("associatedDiseases", {})
+            if total is None:
+                total = assoc.get("count", 0)
+                logger.info("[IND_MAPPING] Target %s: %d associated diseases in OT", tid, total)
+            rows = assoc.get("rows", [])
+            if not rows:
+                break
+            for row in rows:
+                d = row.get("disease", {})
+                did = d.get("id")
+                name = d.get("name", "")
+                if did and did not in seen:
+                    seen.add(did)
+                    all_diseases.append((did, name))
+            fetched += len(rows)
+            if fetched >= (total or 0):
+                break
+            page_index += 1
+
+    logger.info(
+        "[IND_MAPPING] Fetched %d unique diseases across %d target(s)",
+        len(all_diseases), len(target_ids),
+    )
+    return all_diseases
+
+
+def _gemini_match_batch(
+    indications: list[str],
+    ot_diseases: list[tuple[str, str]],
+) -> list[tuple[str, str | None, str | None]]:
+    """One Gemini call to semantically match indications against an OT disease chunk."""
+    disease_lines = "\n".join(
+        f"{i + 1}. {dname} | {did}" for i, (did, dname) in enumerate(ot_diseases)
+    )
+    ind_numbered = "\n".join(f"{i + 1}. {ind}" for i, ind in enumerate(indications))
+
+    prompt = (
+        "You are a biomedical terminology expert.\n\n"
+        "Below is a numbered list of diseases from the OpenTargets Platform, "
+        "followed by a list of clinical indications.\n\n"
+        "Your task: for each indication, find the BEST matching disease "
+        "from the disease list. Consider synonyms, acronyms, spelling "
+        "variants (British/American), and clinical shorthand.\n\n"
+        "STRICT OUTPUT RULES:\n"
+        "- Output ONLY a valid JSON array. No prose, no markdown, no ```json fences.\n"
+        "- One object per indication, in the same order as the input.\n"
+        "- Each object must have exactly these keys:\n"
+        '  {"indication": "<exact indication text>", '
+        '"id": "<EFO_/MONDO_ ID from the disease list, or null if no confident match>", '
+        '"name": "<disease name from the disease list, or null>"}\n'
+        "- Use JSON null (not the string \"null\") when no confident match exists.\n"
+        "- ONLY pick from the provided disease list — do NOT invent IDs.\n\n"
+        f"DISEASE LIST:\n{disease_lines}\n\n"
+        f"INDICATIONS TO MATCH:\n{ind_numbered}\n\n"
+        "JSON array output:"
+    )
+
+    text = gemini_call(prompt)
+    parsed = parse_json_response(text)
+    if not parsed:
+        return [(ind, None, None) for ind in indications]
+
+    valid_ids = {did: dname for did, dname in ot_diseases}
+    results: list[tuple[str, str | None, str | None]] = []
+
+    for item in parsed:
+        ind = item.get("indication", "")
+        did = item.get("id") or None
+        name = item.get("name") or None
+
+        if did and did not in valid_ids:
+            logger.warning("[IND_MAPPING] Gemini returned unknown ID '%s' for '%s' — discarding", did, ind)
+            did, name = None, None
+        if did and did in valid_ids:
+            name = valid_ids[did]
+
+        results.append((ind, did, name))
+
+    while len(results) < len(indications):
+        results.append((indications[len(results)], None, None))
+
+    return results
+
+
+def _match_all_against_ot_list(
+    indications: list[str],
+    ot_diseases: list[tuple[str, str]],
+) -> dict[str, tuple[str | None, str | None]]:
+    """Match all indications against the full OT disease list using Gemini,
+    chunking the disease list into groups of ``_DISEASE_CHUNK_SIZE``."""
+    result: dict[str, tuple[str | None, str | None]] = {ind: (None, None) for ind in indications}
+    remaining = list(indications)
+    total_chunks = (len(ot_diseases) + _DISEASE_CHUNK_SIZE - 1) // _DISEASE_CHUNK_SIZE
+
+    logger.info(
+        "[IND_MAPPING] Gemini matching: %d indication(s) × %d diseases → %d chunk(s)",
+        len(indications), len(ot_diseases), total_chunks,
+    )
+
+    for chunk_idx in range(total_chunks):
+        if not remaining:
+            break
+        chunk = ot_diseases[chunk_idx * _DISEASE_CHUNK_SIZE : (chunk_idx + 1) * _DISEASE_CHUNK_SIZE]
+
+        batch_results = None
+        for attempt in range(1, 3):
+            try:
+                batch_results = _gemini_match_batch(remaining, chunk)
+                if len(batch_results) == len(remaining):
+                    break
+            except Exception as exc:
+                logger.warning("[IND_MAPPING] Chunk %d attempt %d failed: %s", chunk_idx + 1, attempt, exc)
+            time.sleep(2)
+
+        if not batch_results:
+            continue
+
+        still_unresolved = []
+        for ind, did, name in batch_results:
+            if did:
+                result[ind] = (did, name)
+                logger.info("[IND_MAPPING] Gemini: '%s' → %s (%s)", ind, did, name)
+            else:
+                still_unresolved.append(ind)
+        remaining = still_unresolved
+
+    return result
+
+
+# ==============================
+# FETCH INDICATIONS FROM LE_TABLE
+# ==============================
+def fetch_indications_for_drug(drug_name: str) -> list[str]:
+    """Fetches distinct indications for a drug from the LE_TABLE."""
     bq_client = get_bq_client()
-    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{drug_details_table}"
+    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LE_TABLE}"
 
     query = f"""
-        SELECT
-            Cleaned_Generic_Name,
-            STRING_AGG(DISTINCT Mechanism_of_Action, '; ') AS Mechanisms_Of_Action
+        SELECT DISTINCT indication
         FROM `{table_id}`
-        WHERE Cleaned_Generic_Name = @drug_name
-        GROUP BY Cleaned_Generic_Name
+        WHERE drug_name = @drug_name
+          AND indication IS NOT NULL
+          AND indication != ''
+          AND indication != 'Unknown (extraction failed)'
     """
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
@@ -270,65 +487,147 @@ def fetch_moa_for_drug(drug_name: str, drug_details_table: str) -> list[str]:
         ]
     )
     results = bq_client.query(query, job_config=job_config).result()
+    indications = [row["indication"].strip() for row in results if row["indication"]]
 
-    moas: list[str] = []
-    for row in results:
-        raw = row.get("Mechanisms_Of_Action") or ""
-        for part in raw.split("; "):
-            part = part.strip()
-            if part:
-                moas.append(part)
-
-    logger.info("[MOA_MAPPING] Fetched %d MOA(s) for '%s': %s", len(moas), drug_name, moas)
-    return moas
+    logger.info("[IND_MAPPING] Fetched %d indication(s) for '%s' from %s", len(indications), drug_name, LE_TABLE)
+    return indications
 
 
 # ==============================
 # ENTRY POINT
 # ==============================
-def run_moa_mapping(drug_name: str = DRUG_NAME, drug_details_table: str = "drug_details") -> list[dict]:
-    """Full MOA mapping pipeline for one drug.
+def run_indication_mapping(
+    drug_name: str = DRUG_NAME,
+    target_ensembl_ids: list[str] | None = None,
+) -> list[dict]:
+    """Full indication mapping pipeline for one drug.
 
-    1. Fetch MOAs from BQ drug_details table.
-    2. Check which MOAs are already resolved in ``OT_MOA_TABLE``.
-    3. Resolve only the new ones (Phase 1 + Phase 2).
-    4. Push new mappings to ``OT_MOA_TABLE``.
-    5. Return all resolved mappings (existing + new).
+    1. Fetch indications from ``LE_TABLE``.
+    2. Check which indications are already resolved in ``OT_DISEASE_TABLE``.
+    3. Normalize and deduplicate new indications.
+    4. Resolve via Path A (Gemini + OT disease list) if targets given,
+       then Path B (OT text search) for any remaining.
+    5. Push new mappings to ``OT_DISEASE_TABLE``.
+    6. Return all resolved mappings (existing + new).
+
+    Args:
+        drug_name: the drug/molecule name.
+        target_ensembl_ids: Ensembl IDs for the drug's gene targets
+            (enables Path A Gemini matching). Pass ``None`` to skip Path A.
+
+    Returns:
+        List of dicts with keys ``indication``, ``ot_disease``, ``ot_disease_id``.
     """
-    logger.info("[MOA_MAPPING] Starting MOA mapping for '%s'", drug_name)
+    logger.info("[IND_MAPPING] Starting indication mapping for '%s'", drug_name)
 
-    # Step 1: Fetch MOAs
-    moas = fetch_moa_for_drug(drug_name, drug_details_table)
-    if not moas:
-        logger.warning("[MOA_MAPPING] No MOAs found for '%s' — nothing to resolve", drug_name)
+    # Step 1: Fetch indications
+    indications = fetch_indications_for_drug(drug_name)
+    if not indications:
+        logger.warning("[IND_MAPPING] No indications found for '%s' — nothing to resolve", drug_name)
         return []
 
     # Step 2: Check existing mappings
-    existing = fetch_existing_mappings(OT_MOA_TABLE, "moa")
-    new_moas = [m for m in moas if m.strip().lower() not in existing]
+    existing = fetch_existing_mappings(OT_DISEASE_TABLE, "indication")
+    new_indications = [ind for ind in indications if ind.strip().lower() not in existing]
     logger.info(
-        "[MOA_MAPPING] %d MOA(s) total, %d already resolved, %d new to resolve",
-        len(moas), len(moas) - len(new_moas), len(new_moas),
+        "[IND_MAPPING] %d indication(s) total, %d already resolved, %d new to resolve",
+        len(indications), len(indications) - len(new_indications), len(new_indications),
     )
 
-    # Step 3: Resolve new MOAs
-    new_mappings: list[dict] = []
-    for moa in new_moas:
-        result = resolve_single_moa(moa)
-        new_mappings.append({"moa": result["moa"], "ot_moa": result["ot_moa"]})
+    if not new_indications:
+        logger.info("[IND_MAPPING] All indications already resolved — skipping resolution")
+        return [
+            {"indication": ind, "ot_disease": existing.get(ind.strip().lower()), "ot_disease_id": None}
+            for ind in indications
+        ]
 
-    # Step 4: Push new mappings to BQ
-    push_mappings(OT_MOA_TABLE, OT_MOA_SCHEMA, new_mappings)
+    # Step 3: Normalize and deduplicate
+    norm_to_raw: dict[str, str] = {}
+    raw_to_norm: dict[str, str] = {}
+    for raw in new_indications:
+        nk = normalize_indication(raw)
+        raw_to_norm[raw] = nk
+        if nk not in norm_to_raw:
+            norm_to_raw[nk] = raw
+    unique_reps = list(norm_to_raw.values())
 
-    # Step 5: Return all mappings (existing + new)
+    # Step 4a: Path A — Gemini semantic matching
+    gemini_unresolved = list(unique_reps)
+    resolved_map: dict[str, tuple[str | None, str | None]] = {}
+
+    if target_ensembl_ids:
+        logger.info("[IND_MAPPING] Path A: Fetching OT diseases for %d target(s)", len(target_ensembl_ids))
+        ot_diseases = fetch_all_target_diseases(target_ensembl_ids)
+        if ot_diseases:
+            gemini_results = _match_all_against_ot_list(unique_reps, ot_diseases)
+            gemini_unresolved = []
+            for ind in unique_reps:
+                did, name = gemini_results.get(ind, (None, None))
+                if did:
+                    resolved_map[ind] = (did, name)
+                else:
+                    gemini_unresolved.append(ind)
+            if gemini_unresolved:
+                logger.info(
+                    "[IND_MAPPING] %d indication(s) unmatched by Gemini — falling back to OT text search",
+                    len(gemini_unresolved),
+                )
+    else:
+        logger.info("[IND_MAPPING] Path A skipped (no target_ensembl_ids provided)")
+
+    # Step 4b: Path B — OT text search
+    if gemini_unresolved:
+        logger.info("[IND_MAPPING] Path B: OT text search for %d indication(s)", len(gemini_unresolved))
+
+        def _resolve_one(ind: str) -> tuple[str, str | None, str | None]:
+            did, name = _resolve_via_ot_search(ind)
+            if did:
+                logger.info("[IND_MAPPING] OT search: '%s' → %s (%s)", ind, did, name)
+            else:
+                logger.warning("[IND_MAPPING] Could not resolve '%s'", ind)
+            return ind, did, name
+
+        with ThreadPoolExecutor(
+            max_workers=min(_WORKERS, len(gemini_unresolved)),
+            thread_name_prefix="ind-resolve",
+        ) as exe:
+            futures = {exe.submit(_resolve_one, ind): ind for ind in gemini_unresolved}
+            for fut in as_completed(futures):
+                ind, did, name = fut.result()
+                resolved_map[ind] = (did, name)
+
+    # Map representative results back to all raw variants
+    final_resolved: dict[str, tuple[str | None, str | None]] = {}
+    for raw in new_indications:
+        nk = raw_to_norm[raw]
+        rep = norm_to_raw[nk]
+        final_resolved[raw] = resolved_map.get(rep, (None, None))
+
+    # Step 5: Push new mappings to BQ
+    new_rows: list[dict] = []
+    pushed_keys: set[str] = set()
+    for raw, (did, name) in final_resolved.items():
+        key = raw.strip().lower()
+        if key not in pushed_keys:
+            pushed_keys.add(key)
+            new_rows.append({
+                "indication": raw,
+                "ot_disease": name,
+                "ot_disease_id": did,
+            })
+    push_mappings(OT_DISEASE_TABLE, OT_DISEASE_SCHEMA, new_rows)
+
+    # Step 6: Return all mappings
     all_mappings: list[dict] = []
-    for moa in moas:
-        key = moa.strip().lower()
+    for ind in indications:
+        key = ind.strip().lower()
         if key in existing:
-            all_mappings.append({"moa": moa, "ot_moa": existing[key]})
+            all_mappings.append({"indication": ind, "ot_disease": existing[key], "ot_disease_id": None})
+        elif ind in final_resolved:
+            did, name = final_resolved[ind]
+            all_mappings.append({"indication": ind, "ot_disease": name, "ot_disease_id": did})
         else:
-            match = next((m for m in new_mappings if m["moa"] == moa), None)
-            all_mappings.append(match or {"moa": moa, "ot_moa": None})
+            all_mappings.append({"indication": ind, "ot_disease": None, "ot_disease_id": None})
 
-    logger.info("[MOA_MAPPING] Completed. %d mapping(s) for '%s'", len(all_mappings), drug_name)
+    logger.info("[IND_MAPPING] Completed. %d mapping(s) for '%s'", len(all_mappings), drug_name)
     return all_mappings
