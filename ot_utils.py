@@ -207,21 +207,23 @@ def ensure_table_exists(
 def fetch_existing_mappings(
     table_name: str,
     source_column: str,
-) -> dict[str, str]:
-    """Returns a dict of ``{source_value_lower: resolved_value}`` from the
-    given mapping table. Returns an empty dict if the table doesn't exist."""
+) -> dict[str, dict]:
+    """Returns a dict of ``{source_value_lower: {other_column: value, ...}}``
+    from the given mapping table (all columns except the source column
+    itself). Returns an empty dict if the table doesn't exist."""
     table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{table_name}"
     bq_client = get_bq_client()
 
-    target_column = "ot_moa" if source_column == "moa" else "ot_disease"
-    query = f"SELECT {source_column}, {target_column} FROM `{table_id}`"
+    query = f"SELECT * FROM `{table_id}`"
     try:
         results = bq_client.query(query).result()
-        return {
-            row[source_column].strip().lower(): row[target_column]
-            for row in results
-            if row[source_column]
-        }
+        mapping: dict[str, dict] = {}
+        for row in results:
+            row_dict = dict(row.items())
+            key = (row_dict.get(source_column) or "").strip().lower()
+            if key:
+                mapping[key] = {k: v for k, v in row_dict.items() if k != source_column}
+        return mapping
     except Exception:
         logger.info(
             "[OT_UTILS] Table %s does not exist yet or is empty — treating all values as new",
