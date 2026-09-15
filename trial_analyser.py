@@ -18,6 +18,7 @@ from medical_potential.config import (
     CLINICAL_EFFICACY_TABLE,
     DRUG_NAME,
     INDICATIONS_PER_CALL,
+    LE_TABLE,
     PROJECT_ID,
     TRIALS_PER_CALL,
 )
@@ -27,6 +28,8 @@ from medical_potential.label_expansion_opportunity.indication_extractor.utils im
     extract_json,
     gemini_generate,
 )
+
+from ..bq_utils import fetch_existing_trial_ids
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +81,14 @@ def _clean_trial_id(trial_id) -> str:
     if paren_idx != -1:
         s = s[:paren_idx].strip()
     return s
+
+
+def _normalize_trial_id(trial_id) -> str:
+    """Strips whitespace/punctuation, a parenthetical annotation, and
+    upper-cases a trial_id so it can be compared reliably regardless of
+    minor formatting differences. Matches the normalization used by
+    ``bq_utils.fetch_existing_trial_ids`` so the two stay in sync."""
+    return re.sub(r"[^A-Za-z0-9]", "", _clean_trial_id(trial_id)).upper()
 
 
 def _extract_trial_batch(rows: list[dict]) -> list[tuple[str, list[dict], str, str]]:
@@ -200,7 +211,7 @@ Rules:
             # Tolerates whitespace, case, punctuation, and a parenthetical
             # company-code suffix (e.g. "NCT01234567 (BGMxxxx)") so a
             # reformatted or annotated trial_id still matches the one we sent.
-            return re.sub(r"[^A-Za-z0-9]", "", _clean_trial_id(tid)).upper()
+            return _normalize_trial_id(tid)
 
         by_trial_id = {_norm(t.get("trial_id")): t for t in raw_trials}
 
@@ -402,6 +413,31 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
     trial_rows = fetch_trial_rows(drug_name)
     if not trial_rows:
         logger.warning("[TRIAL_ANALYSER] No trial rows found for '%s' - skipping module", drug_name)
+        return []
+
+    # Incremental run: skip trials whose trial_id is already in LE_TABLE for
+    # this drug, so re-running the pipeline doesn't re-extract (and
+    # re-append/re-generate slightly different text for) trials already
+    # processed. Only genuinely new trials hit Gemini.
+    existing_trial_ids = fetch_existing_trial_ids(drug_name)
+    if existing_trial_ids:
+        total_before = len(trial_rows)
+        trial_rows = [
+            r for r in trial_rows
+            if _normalize_trial_id(r.get("trial_id")) not in existing_trial_ids
+        ]
+        skipped = total_before - len(trial_rows)
+        if skipped:
+            logger.info(
+                "[TRIAL_ANALYSER] Skipping %d trial(s) already in %s for '%s' - processing %d new trial(s)",
+                skipped, LE_TABLE, drug_name, len(trial_rows),
+            )
+
+    if not trial_rows:
+        logger.info(
+            "[TRIAL_ANALYSER] No new trials to process for '%s' - all trials already in %s",
+            drug_name, LE_TABLE,
+        )
         return []
 
     logger.info(
