@@ -66,9 +66,11 @@ def label_expansion(
         drug_name: The drug / molecule name (e.g. "semaglutide").
         drug_details_table: BQ table name holding drug details with
             Mechanism_of_Action column.
-        target_ensembl_ids: Optional Ensembl IDs for the drug's gene targets.
-            Enables Gemini semantic matching (Path A) in indication mapping.
-            Pass ``None`` to use OT text search only (Path B).
+        target_ensembl_ids: Optional Ensembl IDs for the drug's gene targets,
+            to enable Gemini semantic matching (Path A) in indication mapping.
+            If ``None`` (default), these are derived automatically from the
+            MOA mapping resolved in Step 4 — you normally don't need to pass
+            this explicitly. Pass an explicit list only to override that.
         run_ot_mapping: Whether to run Steps 4-5. Set ``False`` to only
             discover indications without OT resolution.
 
@@ -124,11 +126,30 @@ def label_expansion(
     # ── Step 5: Indication → Open Targets disease mapping ──────────────────
     indication_mappings = []
     if run_ot_mapping:
+        # Derive target Ensembl IDs from the MOA mapping we just resolved in
+        # Step 4, so Path A (Gemini matching against the actual OT diseases
+        # linked to this drug's target) runs automatically — no need for the
+        # caller to supply target_ensembl_ids by hand. An explicit
+        # target_ensembl_ids argument still overrides this.
+        effective_target_ids = target_ensembl_ids
+        if effective_target_ids is None:
+            effective_target_ids = [m["ensembl_id"] for m in moa_mappings if m.get("ensembl_id")]
+            if effective_target_ids:
+                logger.info(
+                    "[LABEL_EXPANSION] Derived %d target Ensembl ID(s) from MOA mapping for Path A: %s",
+                    len(effective_target_ids), effective_target_ids,
+                )
+            else:
+                logger.warning(
+                    "[LABEL_EXPANSION] No Ensembl ID resolved from MOA mapping — "
+                    "Step 5 will fall back to OT text search only (Path B)"
+                )
+
         logger.info("[LABEL_EXPANSION] Step 5: Resolve indications to Open Targets disease names")
         try:
             indication_mappings = run_indication_mapping(
                 drug_name=drug_name,
-                target_ensembl_ids=target_ensembl_ids,
+                target_ensembl_ids=effective_target_ids,
             )
             logger.info(
                 "[LABEL_EXPANSION] Step 5 complete: %d indication mapping(s)",
