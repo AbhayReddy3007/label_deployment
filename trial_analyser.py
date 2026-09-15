@@ -17,19 +17,18 @@ from medical_potential.config import (
     BQ_DATASET_ID,
     CLINICAL_EFFICACY_TABLE,
     DRUG_NAME,
-    INDICATIONS_PER_CALL,
-    LE_TABLE,
     PROJECT_ID,
-    TRIALS_PER_CALL,
 )
 from medical_potential.gcp_utils import get_bq_client
 from medical_potential.label_expansion_opportunity.indication_extractor.utils import (
+    INDICATIONS_PER_CALL,
     SECONDARY_INDICATION_CRITERIA,
+    TRIALS_PER_CALL,
     extract_json,
     gemini_generate,
 )
 
-from ..bq_utils import fetch_existing_trial_ids
+from ..bq_utils import LE_TABLE, fetch_existing_trial_ids
 
 logger = logging.getLogger(__name__)
 
