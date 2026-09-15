@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 OT_MOA_SCHEMA: list[bigquery.SchemaField] = [
     bigquery.SchemaField("moa", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("ot_moa", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("ensembl_id", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("created_at", "TIMESTAMP", mode="NULLABLE"),
     bigquery.SchemaField("updated_at", "TIMESTAMP", mode="NULLABLE"),
 ]
@@ -315,7 +316,11 @@ def run_moa_mapping(drug_name: str = DRUG_NAME, drug_details_table: str = "drug_
     new_mappings: list[dict] = []
     for moa in new_moas:
         result = resolve_single_moa(moa)
-        new_mappings.append({"moa": result["moa"], "ot_moa": result["ot_moa"]})
+        new_mappings.append({
+            "moa": result["moa"],
+            "ot_moa": result["ot_moa"],
+            "ensembl_id": result["ensembl_id"],
+        })
 
     # Step 4: Push new mappings to BQ
     push_mappings(OT_MOA_TABLE, OT_MOA_SCHEMA, new_mappings)
@@ -325,10 +330,14 @@ def run_moa_mapping(drug_name: str = DRUG_NAME, drug_details_table: str = "drug_
     for moa in moas:
         key = moa.strip().lower()
         if key in existing:
-            all_mappings.append({"moa": moa, "ot_moa": existing[key]})
+            all_mappings.append({
+                "moa": moa,
+                "ot_moa": existing[key].get("ot_moa"),
+                "ensembl_id": existing[key].get("ensembl_id"),
+            })
         else:
             match = next((m for m in new_mappings if m["moa"] == moa), None)
-            all_mappings.append(match or {"moa": moa, "ot_moa": None})
+            all_mappings.append(match or {"moa": moa, "ot_moa": None, "ensembl_id": None})
 
     logger.info("[MOA_MAPPING] Completed. %d mapping(s) for '%s'", len(all_mappings), drug_name)
     return all_mappings
