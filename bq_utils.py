@@ -13,10 +13,16 @@ from datetime import datetime, timezone
 
 from google.cloud import bigquery
 
-from medical_potential.config import BQ_DATASET_ID, LE_TABLE, PROJECT_ID
+from medical_potential.config import BQ_DATASET_ID, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
 logger = logging.getLogger(__name__)
+
+# ==============================
+# TABLE NAMES
+# ==============================
+LE_TABLE = "label_expansion_opportunity_results"
+LE_SCORE_CALCULATION_TABLE = "label_expansion_score_calculation"
 
 
 # ==============================
@@ -245,3 +251,113 @@ def push_to_bigquery(rows: list[dict]) -> None:
         len(rows),
         table_id,
     )
+
+
+# ==============================
+# SCORE CALCULATION TABLE: SCHEMA + PUSH
+# ==============================
+LE_SCORE_SCHEMA: list[bigquery.SchemaField] = [
+    bigquery.SchemaField("drug_name", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("indication", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("therapy_area", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("ta_i", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("ot_disease_name", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("trial_id", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("phase", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("primary_region", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("dosage", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("drug_arm_size_n", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("data_source", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("association_score", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("trial_weight", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("phase_weight", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("geo_score", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("sample_score", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("dosage_score", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("prior", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("maturity_weight", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("effective_indications", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("effective_therapy_areas", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("w_geo", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("w_dose", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("w_sample", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("q_i", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("e_phase_i", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("e_i", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("link", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("link_ta", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("l_ind", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("b_raw_ind", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("b_ind", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("l_ta", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("b_raw_ta", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("b_ta", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("b", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("overall_coherence", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("c", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("final_score", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("created_at", "TIMESTAMP", mode="NULLABLE"),
+    bigquery.SchemaField("updated_at", "TIMESTAMP", mode="NULLABLE"),
+]
+
+
+def _ensure_score_table_exists(bq_client: bigquery.Client, table_id: str) -> None:
+    """Creates the score-calculation table if missing, and patches in any
+    columns from ``LE_SCORE_SCHEMA`` that an already-existing table lacks."""
+    table = bigquery.Table(table_id, schema=LE_SCORE_SCHEMA)
+    table = bq_client.create_table(table, exists_ok=True)
+
+    existing_field_names = {f.name for f in table.schema}
+    missing_fields = [f for f in LE_SCORE_SCHEMA if f.name not in existing_field_names]
+    if missing_fields:
+        logger.info(
+            "[LE_SCORE_PUSH] Table %s is missing column(s) %s - adding them now.",
+            table_id,
+            ", ".join(f.name for f in missing_fields),
+        )
+        table.schema = list(table.schema) + missing_fields
+        bq_client.update_table(table, ["schema"])
+
+
+def push_score_calculation(rows: list[dict]) -> None:
+    """Replaces the score-calculation rows for the drug(s) present in
+    ``rows`` inside ``LE_SCORE_CALCULATION_TABLE``.
+
+    One row per TA-I (therapy_area + indication) combination. Since scores
+    are recomputed holistically from the full drug dataset on every run
+    (breadth/coherence metrics are dataset-level constants), a drug's prior
+    rows are deleted and replaced rather than merged field-by-field.
+    """
+    if not rows:
+        logger.info("[LE_SCORE_PUSH] No rows to push - skipping.")
+        return
+
+    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LE_SCORE_CALCULATION_TABLE}"
+    now = datetime.now(timezone.utc).isoformat()
+
+    bq_client = get_bq_client()
+    _ensure_score_table_exists(bq_client, table_id)
+
+    drug_names = sorted({r.get("drug_name") for r in rows if r.get("drug_name")})
+    if drug_names:
+        delete_query = f"DELETE FROM `{table_id}` WHERE drug_name IN UNNEST(@drug_names)"
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ArrayQueryParameter("drug_names", "STRING", drug_names)]
+        )
+        bq_client.query(delete_query, job_config=job_config).result()
+
+    insert_rows = []
+    for r in rows:
+        row = {field.name: r.get(field.name) for field in LE_SCORE_SCHEMA if field.name not in ("created_at", "updated_at")}
+        row["created_at"] = now
+        row["updated_at"] = now
+        insert_rows.append(row)
+
+    errors = bq_client.insert_rows_json(table_id, insert_rows)
+    if errors:
+        logger.error("[LE_SCORE_PUSH] Errors inserting rows into %s: %s", table_id, errors)
+    else:
+        logger.info(
+            "[LE_SCORE_PUSH] Inserted %d row(s) into %s for drug(s): %s",
+            len(insert_rows), table_id, ", ".join(drug_names),
+        )
