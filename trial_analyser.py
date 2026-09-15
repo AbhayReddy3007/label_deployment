@@ -52,7 +52,8 @@ def fetch_trial_rows(drug_name: str = DRUG_NAME) -> list[dict]:
     table_id = f"`{PROJECT_ID}.{BQ_DATASET_ID}.{CLINICAL_EFFICACY_TABLE}`"
 
     query = f"""
-        SELECT molecule_name, company_name, source_url, phase, trial_id
+        SELECT molecule_name, company_name, source_url, phase, trial_id,
+               dosage, trial_size, trial_location
         FROM {table_id}
         WHERE LOWER(molecule_name) = LOWER(@drug_name)
     """
@@ -485,6 +486,9 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
                     "trial_title": trial_title,
                     "trial_id": trial_id,
                     "phase": phase,
+                    "dosage": row.get("dosage"),
+                    "trial_size": str(row.get("trial_size")) if row.get("trial_size") is not None else None,
+                    "trial_location": row.get("trial_location"),
                     "source_url": row.get("source_url"),
                     "data_source": "Trials",
                 }
@@ -507,6 +511,9 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
                     "trial_title": trial_title,
                     "trial_id": trial_id,
                     "phase": phase,
+                    "dosage": row.get("dosage"),
+                    "trial_size": str(row.get("trial_size")) if row.get("trial_size") is not None else None,
+                    "trial_location": row.get("trial_location"),
                     "source_url": row.get("source_url"),
                     "data_source": "Trials",
                 }
