@@ -8,6 +8,7 @@ rows into the configured BigQuery table.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 
 from google.cloud import bigquery
@@ -16,6 +17,59 @@ from medical_potential.config import BQ_DATASET_ID, LE_TABLE, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
 logger = logging.getLogger(__name__)
+
+
+# ==============================
+# FETCH EXISTING TRIAL IDS (for incremental runs)
+# ==============================
+def fetch_existing_trial_ids(drug_name: str) -> set[str]:
+    """Returns the set of ``trial_id`` values already present in ``LE_TABLE``
+    for this drug (normalized: stripped of whitespace/punctuation, upper-cased,
+    parenthetical annotations removed). Used so a re-run only processes trials
+    that haven't been extracted before.
+
+    Returns an empty set if the table doesn't exist yet or has no rows for
+    this drug.
+    """
+    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LE_TABLE}"
+    bq_client = get_bq_client()
+
+    query = f"""
+        SELECT DISTINCT trial_id
+        FROM `{table_id}`
+        WHERE LOWER(drug_name) = LOWER(@drug_name)
+          AND trial_id IS NOT NULL
+          AND trial_id != ''
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("drug_name", "STRING", drug_name)]
+    )
+    try:
+        results = bq_client.query(query, job_config=job_config).result()
+        normalized_ids = {_normalize_trial_id(row["trial_id"]) for row in results if row["trial_id"]}
+        logger.info(
+            "[LE_BQ] Found %d existing trial_id(s) already in %s for '%s'",
+            len(normalized_ids), LE_TABLE, drug_name,
+        )
+        return normalized_ids
+    except Exception:
+        logger.info(
+            "[LE_BQ] %s does not exist yet or has no rows for '%s' — treating all trials as new",
+            LE_TABLE, drug_name,
+        )
+        return set()
+
+
+def _normalize_trial_id(trial_id) -> str:
+    """Strips whitespace/punctuation, a parenthetical annotation, and
+    upper-cases a trial_id so it can be compared reliably regardless of
+    minor formatting differences, e.g. 'nct06929156 (BGM0504-305)' and
+    'NCT06929156' both normalize to 'NCT06929156'."""
+    s = str(trial_id or "").strip()
+    paren_idx = s.find("(")
+    if paren_idx != -1:
+        s = s[:paren_idx].strip()
+    return re.sub(r"[^A-Za-z0-9]", "", s).upper()
 
 
 # ==============================
