@@ -11,6 +11,11 @@ Runs the full label-expansion pipeline for exactly one drug:
     4. Resolve the drug's Mechanism(s) of Action to OT target names.
     5. Resolve discovered indications to OT disease names.
 
+**Score Calculation (Step 6):**
+    6. Select the best trial per therapy_area/OT-disease combination,
+       compute trial weights, and derive a composite Final Score, pushed
+       to LE_SCORE_CALCULATION_TABLE.
+
 Run with:
     python -m medical_potential.label_expansion_opportunity.label_expansion_opportunity
 """
@@ -24,6 +29,7 @@ from medical_potential.config import DRUG_NAME
 from .bq_utils import merge_results, push_to_bigquery
 from .indication_extractor import analyse_trials, analyse_web
 from .ot_mapping import run_moa_mapping, run_indication_mapping
+from .scoring import run_score_calculation
 
 # ── Logging ────────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.WARNING, format="[%(levelname)s] %(message)s")
@@ -160,21 +166,35 @@ def label_expansion(
     else:
         logger.info("[LABEL_EXPANSION] Step 5: Skipped (run_ot_mapping=False)")
 
+    # ── Step 6: Score calculation ────────────────────────────────────────────
+    score_rows = []
+    if run_ot_mapping:
+        logger.info("[LABEL_EXPANSION] Step 6: Compute label-expansion scores")
+        try:
+            score_rows = run_score_calculation(drug_name=drug_name, push=True)
+            logger.info("[LABEL_EXPANSION] Step 6 complete: %d TA-I score row(s)", len(score_rows))
+        except Exception:
+            logger.exception("[LABEL_EXPANSION] Step 6 failed for '%s'", drug_name)
+    else:
+        logger.info("[LABEL_EXPANSION] Step 6: Skipped (run_ot_mapping=False)")
+
     # ── Done ───────────────────────────────────────────────────────────────
     output = {
         "drug_name": drug_name,
         "merged_rows": merged_rows,
         "moa_mappings": moa_mappings,
         "indication_mappings": indication_mappings,
+        "score_rows": score_rows,
     }
 
     logger.info(
         "[LABEL_EXPANSION] Pipeline complete for '%s': "
-        "%d indication row(s), %d MOA mapping(s), %d indication mapping(s)",
+        "%d indication row(s), %d MOA mapping(s), %d indication mapping(s), %d score row(s)",
         drug_name,
         len(merged_rows),
         len(moa_mappings),
         len(indication_mappings),
+        len(score_rows),
     )
     return output
 
