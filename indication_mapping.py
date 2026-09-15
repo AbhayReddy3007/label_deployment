@@ -26,8 +26,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from google.cloud import bigquery
 
-from medical_potential.config import BQ_DATASET_ID, DRUG_NAME, LE_TABLE, PROJECT_ID
+from medical_potential.config import BQ_DATASET_ID, DRUG_NAME, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
+
+from ..bq_utils import LE_TABLE
 
 from .ot_utils import (
     OT_DISEASE_TABLE,
