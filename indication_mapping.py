@@ -537,7 +537,11 @@ def run_indication_mapping(
     if not new_indications:
         logger.info("[IND_MAPPING] All indications already resolved — skipping resolution")
         return [
-            {"indication": ind, "ot_disease": existing.get(ind.strip().lower()), "ot_disease_id": None}
+            {
+                "indication": ind,
+                "ot_disease": existing.get(ind.strip().lower(), {}).get("ot_disease"),
+                "ot_disease_id": existing.get(ind.strip().lower(), {}).get("ot_disease_id"),
+            }
             for ind in indications
         ]
 
@@ -622,7 +626,11 @@ def run_indication_mapping(
     for ind in indications:
         key = ind.strip().lower()
         if key in existing:
-            all_mappings.append({"indication": ind, "ot_disease": existing[key], "ot_disease_id": None})
+            all_mappings.append({
+                "indication": ind,
+                "ot_disease": existing[key].get("ot_disease"),
+                "ot_disease_id": existing[key].get("ot_disease_id"),
+            })
         elif ind in final_resolved:
             did, name = final_resolved[ind]
             all_mappings.append({"indication": ind, "ot_disease": name, "ot_disease_id": did})
