@@ -69,10 +69,19 @@ def _normalize_trial_id(trial_id) -> str:
 # ==============================
 # STEP 1: FETCH LE_TABLE ROWS
 # ==============================
-def fetch_le_rows(drug_name: str = DRUG_NAME) -> list[dict]:
-    """Fetches every ``LE_TABLE`` row for this drug (trial- and web-sourced)."""
+def fetch_le_rows(drug_name: str = DRUG_NAME, secondary_only: bool = False) -> list[dict]:
+    """Fetches ``LE_TABLE`` rows for this drug (trial- and web-sourced).
+
+    Args:
+        drug_name: the drug/molecule name.
+        secondary_only: if ``True``, only fetches rows where
+            ``indication_type = 'Secondary'``. Used for scoring, which
+            should only run on label-expansion candidates.
+    """
     bq_client = get_bq_client()
     table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LE_TABLE}"
+
+    secondary_filter = "AND LOWER(indication_type) = 'secondary'" if secondary_only else ""
 
     query = f"""
         SELECT drug_name, indication, indication_type, therapy_area, rationale,
@@ -80,13 +89,15 @@ def fetch_le_rows(drug_name: str = DRUG_NAME) -> list[dict]:
                source_url, data_source
         FROM `{table_id}`
         WHERE LOWER(drug_name) = LOWER(@drug_name)
+          {secondary_filter}
     """
     job_config = bigquery.QueryJobConfig(
         query_parameters=[bigquery.ScalarQueryParameter("drug_name", "STRING", drug_name)]
     )
     results = bq_client.query(query, job_config=job_config).result()
     rows = [dict(row) for row in results]
-    logger.info("[DATA_FETCHER] Fetched %d %s row(s) for '%s'", len(rows), LE_TABLE, drug_name)
+    label = "Secondary" if secondary_only else "all"
+    logger.info("[DATA_FETCHER] Fetched %d %s %s row(s) for '%s'", len(rows), label, LE_TABLE, drug_name)
     return rows
 
 
@@ -333,7 +344,7 @@ def gemini_fill_missing(trial_ids: list[str], batch_size: int = GEMINI_TRIALS_PE
 # ==============================
 # ENTRY POINT
 # ==============================
-def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, drug_details_table: str = "drug_details") -> list[dict]:
+def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, drug_details_table: str = "drug_details", secondary_only: bool = False) -> list[dict]:
     """Fetches all LE_TABLE rows for a drug and enriches them for scoring.
 
     ``association_score`` (Step 2) is resolved for every row — trial- and
@@ -353,7 +364,7 @@ def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, drug_details_table: 
     plus ``primary_region``, ``drug_arm_size_n``, ``dosage``, and
     ``association_score``.
     """
-    rows = fetch_le_rows(drug_name)
+    rows = fetch_le_rows(drug_name, secondary_only=secondary_only)
     if not rows:
         logger.warning("[DATA_FETCHER] No %s rows found for '%s'", LE_TABLE, drug_name)
         return []
