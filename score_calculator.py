@@ -474,16 +474,21 @@ def add_final_score(df: pd.DataFrame) -> pd.DataFrame:
 # ==============================
 # MAIN PIPELINE
 # ==============================
-def run_score_calculation(drug_name: str = DRUG_NAME, push: bool = True) -> list[dict]:
+def run_score_calculation(drug_name: str = DRUG_NAME, push: bool = True, secondary_only: bool = False) -> list[dict]:
     """Full score-calculation pipeline for one drug.
 
     1. Select the best trial per TA-I (via ``trial_selector``).
     2. Run all 16 derived-column calculations in order.
     3. Optionally push the result to ``LE_SCORE_CALCULATION_TABLE``.
 
+    Args:
+        drug_name: the drug/molecule name.
+        push: whether to push results to BigQuery.
+        secondary_only: if ``True``, only processes Secondary indications.
+
     Returns a list of dicts, one per TA-I row, with every computed column.
     """
-    rows = select_trials(drug_name)
+    rows = select_trials(drug_name, secondary_only=secondary_only)
     if not rows:
         logger.warning("[SCORE_CALC] No TA-I rows to score for '%s'", drug_name)
         return []
