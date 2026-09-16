@@ -205,7 +205,7 @@ def compute_trial_weights(rows: list[dict], drug_name: str) -> pd.DataFrame:
         df_trial.loc[approved_mask, "trial_weight"] = 1.0
 
     for col in ("phase_weight", "geo_score", "sample_score", "dosage_score"):
-        df_other[col] = None
+        df_other[col] = float("nan")
     df_other["trial_weight"] = 0.05
 
     df_final = pd.concat([df_trial, df_other], ignore_index=True)
@@ -255,5 +255,5 @@ def select_trials(drug_name: str = DRUG_NAME) -> list[dict]:
     df = compute_trial_weights(rows, drug_name)
     summary_df = select_best_trial_per_tai(df)
 
-    summary_df = summary_df.where(pd.notnull(summary_df), None)
+    summary_df = summary_df.astype(object).where(pd.notnull(summary_df), None)
     return summary_df.to_dict(orient="records")
