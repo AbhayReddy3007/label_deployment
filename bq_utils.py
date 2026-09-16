@@ -8,6 +8,7 @@ rows into the configured BigQuery table.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from datetime import datetime, timezone
 
@@ -319,6 +320,17 @@ def _ensure_score_table_exists(bq_client: bigquery.Client, table_id: str) -> Non
         bq_client.update_table(table, ["schema"])
 
 
+def _json_safe(value):
+    """Converts a float NaN (which is NOT valid JSON - only 'null' is) to
+    None. BigQuery's insertAll REST API rejects a payload containing the
+    literal token 'NaN', so this must run right before serialization -
+    it's the last line of defense even if an upstream `.where(...)` should
+    have already converted NaN to None."""
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
+
+
 def push_score_calculation(rows: list[dict]) -> None:
     """Replaces the score-calculation rows for the drug(s) present in
     ``rows`` inside ``LE_SCORE_CALCULATION_TABLE``.
@@ -348,7 +360,11 @@ def push_score_calculation(rows: list[dict]) -> None:
 
     insert_rows = []
     for r in rows:
-        row = {field.name: r.get(field.name) for field in LE_SCORE_SCHEMA if field.name not in ("created_at", "updated_at")}
+        row = {
+            field.name: _json_safe(r.get(field.name))
+            for field in LE_SCORE_SCHEMA
+            if field.name not in ("created_at", "updated_at")
+        }
         row["created_at"] = now
         row["updated_at"] = now
         insert_rows.append(row)
