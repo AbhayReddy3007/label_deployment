@@ -66,6 +66,9 @@ def normalize_phase(phase_value):
     lower = text.lower()
     if "approved" in lower or "approv" in lower or "market" in lower or "submitted" in lower:
         return "Approved"
+    # Phase 4 == post-approval / post-marketing == Approved
+    if re.search(r"\biv\b", lower) or re.search(r"\b4\b", lower) or re.search(r"phase\s*4", lower):
+        return "Approved"
     if re.search(r"3b", lower) or re.search(r"iiib", lower):
         return "Phase 3"
     return text
@@ -77,9 +80,13 @@ def phase_rank(phase_value) -> int:
     text = str(phase_value).strip().lower()
     if "approved" in text or "approv" in text or "market" in text or "submitted" in text:
         return 4
+    # Phase 4 == post-approval == rank 4 (Approved)
+    if re.search(r"phase\s*4", text) or re.search(r"\bphase\s*iv\b", text):
+        return 4
     if re.search(r"3b", text) or re.search(r"iiib", text):
         return 3
-    roman = {"iii": 3, "ii": 2, "i": 1, "iv": 4}
+    # Roman numerals — check iv before iii/ii/i to avoid partial matches
+    roman = {"iv": 4, "iii": 3, "ii": 2, "i": 1}
     for numeral, val in roman.items():
         if re.search(rf"\b{numeral}\b", text):
             return val
