@@ -238,16 +238,20 @@ def select_best_trial_per_tai(df: pd.DataFrame) -> pd.DataFrame:
 # ==============================
 # ENTRY POINT
 # ==============================
-def select_trials(drug_name: str = DRUG_NAME) -> list[dict]:
+def select_trials(drug_name: str = DRUG_NAME, secondary_only: bool = False) -> list[dict]:
     """Full trial-selection pipeline for one drug:
 
     1. Fetch + enrich all LE_TABLE rows (via ``data_fetcher``).
     2. Compute trial_weight and its components for every row.
     3. Select the single best (highest trial_weight) row per TA-I group.
 
+    Args:
+        drug_name: the drug/molecule name.
+        secondary_only: if ``True``, only processes Secondary indications.
+
     Returns a list of dicts — one per TA-I — ready for ``score_calculator``.
     """
-    rows = fetch_and_enrich_trial_data(drug_name)
+    rows = fetch_and_enrich_trial_data(drug_name, secondary_only=secondary_only)
     if not rows:
         logger.warning("[TRIAL_SELECTOR] No rows to select from for '%s'", drug_name)
         return []
