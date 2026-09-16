@@ -3,18 +3,17 @@
 Runs the full label-expansion pipeline for exactly one drug:
 
 **Indication Discovery (Steps 1-3):**
-    1. Extract indications from registered clinical trials (Module 1 — trial_analyser).
-    2. Extract indications from public web sources (Module 2 — web_analyser).
-    3. Merge and de-duplicate results, push merged rows to BigQuery.
+    1.  Extract indications from registered clinical trials (trial_analyser).
+    1b. Fetch FDA-approved indications (fda_fetcher).
+    2.  Extract indications from public web sources (web_analyser).
+    3.  Merge and de-duplicate results, push merged rows to BigQuery.
 
-**Open Targets Mapping (Steps 4-5):**
-    4. Resolve the drug's Mechanism(s) of Action to OT target names.
-    5. Resolve discovered indications to OT disease names.
+**Open Targets Mapping (Steps 4-5) — Secondary indications only:**
+    4.  Resolve the drug's Mechanism(s) of Action to OT target names.
+    5.  Resolve Secondary indications to OT disease names.
 
-**Score Calculation (Step 6):**
-    6. Select the best trial per therapy_area/OT-disease combination,
-       compute trial weights, and derive a composite Final Score, pushed
-       to LE_SCORE_CALCULATION_TABLE.
+**Score Calculation (Step 6) — Secondary indications only:**
+    6.  Select the best trial per TA-I, compute Final Score, push to BQ.
 
 Run with:
     python -m medical_potential.label_expansion_opportunity.label_expansion_opportunity
@@ -27,7 +26,7 @@ import logging
 from medical_potential.config import DRUG_NAME
 
 from .bq_utils import merge_results, push_to_bigquery
-from .indication_extractor import analyse_trials, analyse_web
+from .indication_extractor import analyse_trials, analyse_web, analyse_fda
 from .ot_mapping import run_moa_mapping, run_indication_mapping
 from .scoring import run_score_calculation
 
@@ -50,23 +49,27 @@ def label_expansion(
 ) -> dict:
     """Run the full Label Expansion Opportunity pipeline for one drug.
 
-    Executes a 5-step pipeline:
+    Executes a 7-step pipeline:
 
     **Indication Discovery (Steps 1-3):**
-        1. Module 1 — trial_analyser: mines registered clinical trials from
-           BigQuery for indications and their trial phase.
-        2. Module 2 — web_analyser: uses Gemini + Google Search to find
-           label-expansion signals from public web sources.
-        3. Merge & push: de-duplicates on (drug_name, indication, trial_id),
-           preferring trial-sourced rows, and upserts into BigQuery.
+        1.  Module 1 — trial_analyser: mines registered clinical trials
+            from BigQuery for indications and their trial phase.
+        1b. Module 3 — fda_fetcher: fetches FDA-approved indications via
+            the openFDA API, with phase = Approved and data_source = Trials.
+        2.  Module 2 — web_analyser: uses Gemini + Google Search to find
+            label-expansion signals from public web sources.
+        3.  Merge & push: de-duplicates on (drug_name, indication, trial_id),
+            preferring trial-sourced rows, and upserts into BigQuery.
 
-    **Open Targets Mapping (Steps 4-5):**
-        4. MOA mapping: fetches Mechanism_of_Action from drug_details table,
-           resolves each to an OT target name (deterministic OT search →
-           Gemini fallback), pushes to OT_MOA_TABLE.
-        5. Indication mapping: reads the indications just pushed to LE_TABLE,
-           resolves each to an OT disease name (Gemini semantic matching →
-           OT text search fallback), pushes to OT_DISEASE_TABLE.
+    **Open Targets Mapping (Steps 4-5) — Secondary indications only:**
+        4.  MOA mapping: fetches Mechanism_of_Action from drug_details table,
+            resolves each to an OT target name, pushes to OT_MOA_TABLE.
+        5.  Indication mapping: reads Secondary indications from LE_TABLE,
+            resolves each to an OT disease name, pushes to OT_DISEASE_TABLE.
+
+    **Score Calculation (Step 6) — Secondary indications only:**
+        6.  Selects the best trial per TA-I, computes trial weights and
+            a composite Final Score, pushes to LE_SCORE_CALCULATION_TABLE.
 
     Args:
         drug_name: The drug / molecule name (e.g. "semaglutide").
@@ -75,14 +78,13 @@ def label_expansion(
         target_ensembl_ids: Optional Ensembl IDs for the drug's gene targets,
             to enable Gemini semantic matching (Path A) in indication mapping.
             If ``None`` (default), these are derived automatically from the
-            MOA mapping resolved in Step 4 — you normally don't need to pass
-            this explicitly. Pass an explicit list only to override that.
-        run_ot_mapping: Whether to run Steps 4-5. Set ``False`` to only
-            discover indications without OT resolution.
+            MOA mapping resolved in Step 4.
+        run_ot_mapping: Whether to run Steps 4-6. Set ``False`` to only
+            discover indications without OT resolution or scoring.
 
     Returns:
         dict with keys: ``drug_name``, ``merged_rows``, ``moa_mappings``,
-        ``indication_mappings``.
+        ``indication_mappings``, ``score_rows``.
     """
     if not isinstance(drug_name, str) or not drug_name.strip():
         raise TypeError(
@@ -96,23 +98,43 @@ def label_expansion(
     trial_rows = analyse_trials(drug_name)
     logger.info("[LABEL_EXPANSION] Step 1 complete: %d trial-sourced row(s)", len(trial_rows))
 
+    # ── Step 1b: Module 3 — FDA Fetcher ────────────────────────────────────
+    logger.info("[LABEL_EXPANSION] Step 1b: Fetch FDA-approved indications (fda_fetcher)")
+    try:
+        fda_rows = analyse_fda(drug_name)
+        logger.info("[LABEL_EXPANSION] Step 1b complete: %d FDA row(s)", len(fda_rows))
+    except Exception:
+        logger.exception("[LABEL_EXPANSION] Step 1b failed for '%s'", drug_name)
+        fda_rows = []
+
+    # Combine trial + FDA rows — both are data_source="Trials"
+    all_trial_rows = trial_rows + fda_rows
+
     # ── Step 2: Module 2 — Web Analyser ────────────────────────────────────
     logger.info("[LABEL_EXPANSION] Step 2: Extract indications from web sources (web_analyser)")
     web_rows = analyse_web(drug_name)
     logger.info("[LABEL_EXPANSION] Step 2 complete: %d web-sourced row(s)", len(web_rows))
 
     # ── Step 3: Merge & push to BigQuery ───────────────────────────────────
-    if not trial_rows and not web_rows:
+    if not all_trial_rows and not web_rows:
         logger.warning(
-            "[LABEL_EXPANSION] Both modules returned no results for '%s' — nothing to push",
+            "[LABEL_EXPANSION] All modules returned no results for '%s' — nothing to push",
             drug_name,
         )
         merged_rows = []
     else:
         logger.info("[LABEL_EXPANSION] Step 3: Merge and push results to BigQuery")
-        merged_rows = merge_results(trial_rows, web_rows)
+        merged_rows = merge_results(all_trial_rows, web_rows)
         push_to_bigquery(merged_rows)
         logger.info("[LABEL_EXPANSION] Step 3 complete: %d merged row(s) pushed", len(merged_rows))
+
+    # Count primary vs secondary for logging
+    n_primary = sum(1 for r in merged_rows if (r.get("indication_type") or "").lower() == "primary")
+    n_secondary = sum(1 for r in merged_rows if (r.get("indication_type") or "").lower() == "secondary")
+    logger.info(
+        "[LABEL_EXPANSION] %d Primary + %d Secondary indication(s) in LE_TABLE",
+        n_primary, n_secondary,
+    )
 
     # ── Step 4: MOA → Open Targets mapping ─────────────────────────────────
     moa_mappings = []
@@ -129,14 +151,9 @@ def label_expansion(
     else:
         logger.info("[LABEL_EXPANSION] Step 4: Skipped (run_ot_mapping=False)")
 
-    # ── Step 5: Indication → Open Targets disease mapping ──────────────────
+    # ── Step 5: Indication → OT disease mapping (Secondary only) ───────────
     indication_mappings = []
     if run_ot_mapping:
-        # Derive target Ensembl IDs from the MOA mapping we just resolved in
-        # Step 4, so Path A (Gemini matching against the actual OT diseases
-        # linked to this drug's target) runs automatically — no need for the
-        # caller to supply target_ensembl_ids by hand. An explicit
-        # target_ensembl_ids argument still overrides this.
         effective_target_ids = target_ensembl_ids
         if effective_target_ids is None:
             effective_target_ids = [m["ensembl_id"] for m in moa_mappings if m.get("ensembl_id")]
@@ -151,11 +168,12 @@ def label_expansion(
                     "Step 5 will fall back to OT text search only (Path B)"
                 )
 
-        logger.info("[LABEL_EXPANSION] Step 5: Resolve indications to Open Targets disease names")
+        logger.info("[LABEL_EXPANSION] Step 5: Resolve Secondary indications to OT disease names")
         try:
             indication_mappings = run_indication_mapping(
                 drug_name=drug_name,
                 target_ensembl_ids=effective_target_ids,
+                secondary_only=True,
             )
             logger.info(
                 "[LABEL_EXPANSION] Step 5 complete: %d indication mapping(s)",
@@ -166,12 +184,12 @@ def label_expansion(
     else:
         logger.info("[LABEL_EXPANSION] Step 5: Skipped (run_ot_mapping=False)")
 
-    # ── Step 6: Score calculation ────────────────────────────────────────────
+    # ── Step 6: Score calculation (Secondary only) ───────────────────────────
     score_rows = []
     if run_ot_mapping:
-        logger.info("[LABEL_EXPANSION] Step 6: Compute label-expansion scores")
+        logger.info("[LABEL_EXPANSION] Step 6: Compute label-expansion scores (Secondary only)")
         try:
-            score_rows = run_score_calculation(drug_name=drug_name, push=True)
+            score_rows = run_score_calculation(drug_name=drug_name, push=True, secondary_only=True)
             logger.info("[LABEL_EXPANSION] Step 6 complete: %d TA-I score row(s)", len(score_rows))
         except Exception:
             logger.exception("[LABEL_EXPANSION] Step 6 failed for '%s'", drug_name)
