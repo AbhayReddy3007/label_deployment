@@ -470,10 +470,19 @@ def _match_all_against_ot_list(
 # ==============================
 # FETCH INDICATIONS FROM LE_TABLE
 # ==============================
-def fetch_indications_for_drug(drug_name: str) -> list[str]:
-    """Fetches distinct indications for a drug from the LE_TABLE."""
+def fetch_indications_for_drug(drug_name: str, secondary_only: bool = False) -> list[str]:
+    """Fetches distinct indications for a drug from the LE_TABLE.
+
+    Args:
+        drug_name: the drug/molecule name.
+        secondary_only: if ``True``, only fetches indications where
+            ``indication_type = 'Secondary'``. Used for OT mapping and
+            scoring, which should only run on label-expansion candidates.
+    """
     bq_client = get_bq_client()
     table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LE_TABLE}"
+
+    secondary_filter = "AND LOWER(indication_type) = 'secondary'" if secondary_only else ""
 
     query = f"""
         SELECT DISTINCT indication
@@ -482,6 +491,7 @@ def fetch_indications_for_drug(drug_name: str) -> list[str]:
           AND indication IS NOT NULL
           AND indication != ''
           AND indication != 'Unknown (extraction failed)'
+          {secondary_filter}
     """
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
@@ -491,7 +501,8 @@ def fetch_indications_for_drug(drug_name: str) -> list[str]:
     results = bq_client.query(query, job_config=job_config).result()
     indications = [row["indication"].strip() for row in results if row["indication"]]
 
-    logger.info("[IND_MAPPING] Fetched %d indication(s) for '%s' from %s", len(indications), drug_name, LE_TABLE)
+    label = "Secondary" if secondary_only else "all"
+    logger.info("[IND_MAPPING] Fetched %d %s indication(s) for '%s' from %s", len(indications), label, drug_name, LE_TABLE)
     return indications
 
 
@@ -501,6 +512,7 @@ def fetch_indications_for_drug(drug_name: str) -> list[str]:
 def run_indication_mapping(
     drug_name: str = DRUG_NAME,
     target_ensembl_ids: list[str] | None = None,
+    secondary_only: bool = False,
 ) -> list[dict]:
     """Full indication mapping pipeline for one drug.
 
@@ -523,7 +535,7 @@ def run_indication_mapping(
     logger.info("[IND_MAPPING] Starting indication mapping for '%s'", drug_name)
 
     # Step 1: Fetch indications
-    indications = fetch_indications_for_drug(drug_name)
+    indications = fetch_indications_for_drug(drug_name, secondary_only=secondary_only)
     if not indications:
         logger.warning("[IND_MAPPING] No indications found for '%s' — nothing to resolve", drug_name)
         return []
