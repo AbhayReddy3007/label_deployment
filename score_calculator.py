@@ -514,7 +514,7 @@ def run_score_calculation(drug_name: str = DRUG_NAME, push: bool = True) -> list
     df = add_C(df)                                # 15
     df = add_final_score(df)                     # 16
 
-    df = df.where(pd.notnull(df), None)
+    df = df.astype(object).where(pd.notnull(df), None)
     result_rows = df.to_dict(orient="records")
 
     logger.info(
