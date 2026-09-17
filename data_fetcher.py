@@ -20,6 +20,7 @@ the scoring model needs:
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from google.cloud import bigquery
 
@@ -32,7 +33,7 @@ from medical_potential.config import (
 from medical_potential.gcp_utils import get_bq_client
 
 from ..bq_utils import LE_TABLE
-from ..indication_extractor.utils import extract_json, gemini_generate
+from ..indication_extractor.utils import extract_json, gemini_generate_with_timeout
 from ..ot_mapping.moa_mapping import fetch_moa_for_drug
 from ..ot_mapping.ot_utils import OT_DISEASE_TABLE, OT_MOA_TABLE, fetch_existing_mappings, ot_post
 
@@ -43,6 +44,9 @@ logger = logging.getLogger(__name__)
 # ==============================
 TRIAL_ENRICHMENT_FIELDS = ("primary_region", "drug_arm_size_n", "dosage")
 GEMINI_TRIALS_PER_CALL = 5
+MAX_WORKERS = 10
+GEMINI_FILL_TIMEOUT_SECONDS = 90  # scaled by batch size, same as trial_analyser
+GEMINI_FILL_MAX_ATTEMPTS = 2  # retry once on timeout before giving up on a batch
 OT_DISEASE_PAGE_SIZE = 50
 
 
@@ -304,40 +308,69 @@ Use null only if genuinely not findable. Do not guess.
 """
 
 
+def _fill_missing_batch(batch: list[str]) -> dict[str, dict]:
+    """Runs one enrichment batch through Gemini with a hard timeout,
+    retrying on timeout before giving up on this batch."""
+    # Larger batches legitimately need more time, so the timeout scales
+    # with batch size (same approach as trial_analyser).
+    timeout = GEMINI_FILL_TIMEOUT_SECONDS * len(batch)
+
+    try:
+        raw = gemini_generate_with_timeout(
+            _build_gemini_prompt(batch),
+            system_instruction=(
+                "You are a clinical trial data assistant. Search for each trial to find "
+                "its geographic region, drug-arm sample size, and dosage. Return ONLY valid JSON."
+            ),
+            use_search=True,
+            timeout_seconds=timeout,
+            max_attempts=GEMINI_FILL_MAX_ATTEMPTS,
+            log_context=f"enrichment batch {batch}",
+        )
+    except Exception as exc:  # noqa: BLE001 - includes TimeoutError
+        logger.warning("[DATA_FETCHER] Gemini fallback failed for batch %s: %s", batch, exc)
+        return {}
+
+    batch_results: dict[str, dict] = {}
+    parsed = extract_json(raw)
+    entries = parsed if isinstance(parsed, list) else parsed.get("trials", []) if isinstance(parsed, dict) else []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        tid = _normalize_trial_id(entry.get("trial_id"))
+        if tid:
+            batch_results[tid] = {
+                "primary_region": entry.get("primary_region"),
+                "drug_arm_size_n": entry.get("drug_arm_size_n"),
+                "dosage": entry.get("dosage"),
+            }
+    return batch_results
+
+
 def gemini_fill_missing(trial_ids: list[str], batch_size: int = GEMINI_TRIALS_PER_CALL) -> dict[str, dict]:
     """Uses Gemini + Google Search grounding to fill in enrichment fields
-    for trials that BQ couldn't resolve. Returns ``{normalized_trial_id: {...}}``."""
+    for trials that BQ couldn't resolve. Returns ``{normalized_trial_id: {...}}``.
+
+    Batches run in parallel (up to ``MAX_WORKERS`` at a time), each with its
+    own timeout so one slow/hung batch can't block the rest."""
     if not trial_ids:
         return {}
 
-    logger.info("[DATA_FETCHER] Gemini fallback for %d trial(s)", len(trial_ids))
+    logger.info(
+        "[DATA_FETCHER] Gemini fallback for %d trial(s) in batches of %d, using %d workers",
+        len(trial_ids), batch_size, MAX_WORKERS,
+    )
     batches = [trial_ids[i : i + batch_size] for i in range(0, len(trial_ids), batch_size)]
     results: dict[str, dict] = {}
 
-    for i, batch in enumerate(batches, 1):
-        try:
-            raw = gemini_generate(
-                _build_gemini_prompt(batch),
-                system_instruction=(
-                    "You are a clinical trial data assistant. Search for each trial to find "
-                    "its geographic region, drug-arm sample size, and dosage. Return ONLY valid JSON."
-                ),
-                use_search=True,
-            )
-            parsed = extract_json(raw)
-            entries = parsed if isinstance(parsed, list) else parsed.get("trials", []) if isinstance(parsed, dict) else []
-            for entry in entries:
-                if not isinstance(entry, dict):
-                    continue
-                tid = _normalize_trial_id(entry.get("trial_id"))
-                if tid:
-                    results[tid] = {
-                        "primary_region": entry.get("primary_region"),
-                        "drug_arm_size_n": entry.get("drug_arm_size_n"),
-                        "dosage": entry.get("dosage"),
-                    }
-        except Exception as exc:
-            logger.warning("[DATA_FETCHER] Gemini fallback failed for batch %d/%d: %s", i, len(batches), exc)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = {executor.submit(_fill_missing_batch, batch): batch for batch in batches}
+        for future in as_completed(futures):
+            batch = futures[future]
+            try:
+                results.update(future.result())
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[DATA_FETCHER] Unexpected error for batch %s: %s", batch, exc)
 
     logger.info("[DATA_FETCHER] Gemini resolved %d/%d trial(s)", len(results), len(trial_ids))
     return results
