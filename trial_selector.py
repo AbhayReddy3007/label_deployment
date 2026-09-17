@@ -165,16 +165,18 @@ def assign_dosage_scores(df: pd.DataFrame) -> pd.Series:
 # TA-I GROUPING KEY
 # ==============================
 def _build_ta_i_column(df: pd.DataFrame, drug_name: str) -> pd.DataFrame:
-    """Adds ``ot_disease_name`` (looked up from ``OT_DISEASE_TABLE``, falling
-    back to the **normalized** raw indication if unresolved) and ``ta_i`` =
-    therapy_area + " - " + ot_disease_name.
+    """Adds ``ot_disease_name`` (looked up from ``OT_DISEASE_TABLE``) and
+    ``ta_i`` = therapy_area + " - " + ot_disease_name, then DROPS any row
+    whose indication has no genuine (non-null) OT mapping.
 
-    The normalization (lowercase, strip hyphens, strip parentheticals) on the
-    fallback path is critical: without it, casing/hyphenation/parenthetical
-    variants of the same unresolved disease (e.g. "Non-Alcoholic Fatty Liver
-    Disease", "Non-alcoholic fatty liver disease", "Non-alcoholic Fatty Liver
-    Disease (NAFLD)") each become their own ``ta_i`` and each produce a
-    separate scored row, inflating breadth metrics and duplicating results.
+    Only genuinely OT-mapped indications should ever get a ``ta_i`` and be
+    scored: a TA-I built from a fallback/normalized raw indication text
+    isn't a real Open Targets disease, can never get an ``association_score``
+    (there's no ``ot_disease_id`` behind it to look up), and pollutes the
+    score table with fake groups. If an indication hasn't resolved yet,
+    excluding it here is correct - it will start appearing once
+    ``run_indication_mapping`` (Path A/B/C) successfully resolves it on a
+    later run.
     """
     existing_disease_map = fetch_existing_mappings(OT_DISEASE_TABLE, "indication")
 
@@ -185,18 +187,31 @@ def _build_ta_i_column(df: pd.DataFrame, drug_name: str) -> pd.DataFrame:
         nk = normalize_indication(raw_key)
         norm_map.setdefault(nk, entry)
 
-    def _ot_name(indication: str) -> str:
+    def _ot_name(indication: str) -> str | None:
         ind = (indication or "").strip()
-        # Try raw key first, then normalized key
         entry = existing_disease_map.get(ind.lower())
         if not entry:
             entry = norm_map.get(normalize_indication(ind))
         if entry and entry.get("ot_disease"):
             return entry["ot_disease"]
-        # Fallback: normalize the raw text so variants collapse
-        return normalize_indication(ind) or ind
+        return None  # no genuine OT mapping - row will be dropped below
 
     df["ot_disease_name"] = df["indication"].apply(_ot_name)
+
+    unmapped_mask = df["ot_disease_name"].isna()
+    n_unmapped = int(unmapped_mask.sum())
+    if n_unmapped:
+        dropped_indications = sorted(df.loc[unmapped_mask, "indication"].unique())
+        logger.info(
+            "[TRIAL_SELECTOR] Dropping %d row(s) with no genuine OT mapping for '%s' "
+            "(not yet resolved - will appear once indication_mapping resolves them): %s",
+            n_unmapped, drug_name, dropped_indications,
+        )
+        df = df.loc[~unmapped_mask].reset_index(drop=True)
+
+    if df.empty:
+        return df
+
     df["ta_i"] = df["therapy_area"].astype(str) + " - " + df["ot_disease_name"].astype(str)
     return df
 
@@ -213,6 +228,8 @@ def compute_trial_weights(rows: list[dict], drug_name: str) -> pd.DataFrame:
         return df
 
     df = _build_ta_i_column(df, drug_name)
+    if df.empty:
+        return df
 
     is_trial = df["data_source"].astype(str).str.strip().str.lower() == "trials"
     df_trial = df[is_trial].copy().reset_index(drop=True)
