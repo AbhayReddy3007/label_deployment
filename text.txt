@@ -1,38 +1,52 @@
-f0_	indication_type
-coronary atherosclerosis	None
-facial skin laxity	None
-facial aging	None
-polycystic ovary syndrome	Not Classified
-endometrial hyperplasia	None
-type 1 diabetes mellitus	Not Applicable
-polycystic ovary syndrome (pcos)	Not Classified
-type 1 diabetes	Not Applicable
-hyperandrogenism	None
-hirsutism	None
-chronic high bowel frequency	None
-fecal incontinence	None
-dumping syndrome	None
-compensated cirrhosis	None
-end-stage liver disease	None
-hiv infections	None
-antipsychotic-induced weight gain	None
-sarcopenia	Not Applicable
-sarcopenic obesity	Not Applicable
-end-stage renal disease	None
-renal impairment	Not Applicable
-alcohol use disorder	None
-cocaine use disorder	None
-cognitive impairment	None
-opioid use disorder	Not Classified
-stimulant use disorder	Not Applicable
-schizophrenia-spectrum disorders	Not Applicable
-idiopathic intracranial hypertension	None
-early-stage breast cancer	None
-breast cancer	None
-endometrial cancer	None
-advanced solid tumors	None
-cancer	None
-dry eye disease	None
-craniopharyngioma	None
-hypothalamic obesity	None
-prader-willi syndrome	Not Applicable
+indication	ot_disease_name
+Stroke	Stroke
+Cardiovascular Diseases	cardiovascular disorder
+Coronary Atherosclerosis	coronary atherosclerosis
+Heart Failure With Preserved Ejection Fraction	heart failure
+Myocardial infarction	myocardial infarction
+Heart Failure	systolic heart failure
+Facial Skin Laxity	Facial Skin Laxity
+Facial Aging	skin aging
+Hirsutism	Hirsutism
+Hyperandrogenism	hyperandrogenism
+Polycystic Ovary Syndrome	polycystic ovary syndrome
+Type 1 Diabetes Mellitus	type 1 diabetes mellitus
+Chronic High Bowel Frequency	Chronic High Bowel Frequency
+Dumping Syndrome	dumping syndrome
+Fecal Incontinence	fecal incontinence
+Inflammatory Bowel Disease	inflammatory bowel disease
+End-stage liver disease	End Stage Liver Disease
+Non-Alcoholic Fatty Liver Disease	alcoholic fatty liver disease
+Non-alcoholic steatohepatitis (NASH)	alcoholic pancreatitis
+Liver cirrhosis	cirrhosis of liver
+Metabolic Dysfunction-Associated Steatohepatitis (MASH)	metabolic dysfunction-associated steatohepatitis
+Metabolic dysfunction-associated steatotic liver disease	metabolic dysfunction-associated steatotic liver disease
+Non-alcoholic Fatty Liver Disease (NAFLD)	non-alcoholic fatty liver
+HIV Infections	HIV-1 infection
+Antipsychotic-induced weight gain	Antipsychotic-induced weight gain
+Hypothalamic Obesity	Hypothalamic Obesity
+Pre-diabetes	Pre-diabetes
+Prediabetes	Prediabetes
+Sarcopenic Obesity	Sarcopenic Obesity
+Metabolic Syndrome	metabolic syndrome
+Prediabetic State	prediabetes syndrome
+Sarcopenia	sarcopenia
+Chronic Kidney Disease	Chronic Kidney Disease
+End-Stage Renal Disease	End-Stage Renal Disease
+Renal Impairment	Renal insufficiency
+Cognitive Impairment	Cognitive impairment
+Idiopathic intracranial hypertension	Idiopathic intracranial hypertension
+Alcohol Use Disorder	alcohol dependence
+Cocaine Use Disorder	cocaine use disorder
+Methamphetamine Use Disorder	methamphetamine dependence
+Opioid Use Disorder	opioid use disorder
+Schizophrenia-spectrum disorders	schizophrenia
+Endometrial Hyperplasia	atypical endometrial hyperplasia
+Breast Cancer	breast neoplasm
+Cancer	cancer
+Endometrial Cancer	endometrial cancer
+Malignant Solid Neoplasm	malignant endocrine neoplasm
+Dry Eye Disease	dry eye syndrome
+Prader-Willi Syndrome	Prader-Willi syndrome
+Craniopharyngioma	craniopharyngioma
+Obstructive sleep apnea	obstructive sleep apnea syndrome
