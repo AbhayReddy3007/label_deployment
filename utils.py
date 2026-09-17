@@ -30,6 +30,28 @@ from medical_potential.config import GEMINI_FLASH_PREVIEW_MODEL
 logger = logging.getLogger(__name__)
 
 # ==============================
+# PIPELINE MODE TOGGLE
+# ==============================
+# False (default): run the full pipeline from scratch - trial_analyser
+# fetches trials and extracts indications via Gemini + Google Search per
+# trial, fda_fetcher fetches FDA brands and label text and extracts
+# disease names, then both classify what they found. This is the
+# expensive path (one search-grounded Gemini call per trial/brand).
+#
+# True: skip re-discovery and re-extraction entirely. Instead,
+# trial_analyser and fda_fetcher pull the indications already sitting in
+# LE_TABLE for the drug and only re-run classification (indication_type /
+# therapy_area / ot_disease_name) on them - one batched Gemini call over
+# the unique indications, not one call per trial/brand. Use this after a
+# classification prompt/logic change (e.g. fixing how Primary/Secondary
+# is decided) when you want existing rows re-classified with the fixed
+# logic without paying to re-discover indications that are already
+# correctly identified. Web-sourced rows are left untouched in this mode,
+# since web_analyser extracts and classifies in a single combined call -
+# there's no cheaper reprocess-only path for it.
+PROCESS_INDICATIONS = False
+
+# ==============================
 # BATCHING CONSTANTS
 # ==============================
 TRIALS_PER_CALL = 1
