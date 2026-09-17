@@ -80,6 +80,61 @@ def _normalize_trial_id(trial_id) -> str:
 
 
 # ==============================
+# FETCH EXISTING ROWS (for PROCESS_INDICATIONS reprocess-only mode)
+# ==============================
+def fetch_existing_indication_rows(drug_name: str, source: str = "trial") -> list[dict]:
+    """Fetches this drug's existing ``LE_TABLE`` rows in full, for
+    ``PROCESS_INDICATIONS`` reprocessing (re-classification without
+    re-extraction).
+
+    Args:
+        drug_name: the drug/molecule name.
+        source: ``"trial"`` for genuine trial-sourced rows (``trial_id``
+            does NOT end in ``" + fda"``) - used by ``trial_analyser``.
+            ``"fda"`` for FDA-sourced rows (``trial_id`` DOES end in
+            ``" + fda"``) - used by ``fda_fetcher``.
+
+    Returns an empty list if the table doesn't exist yet or has no
+    matching rows for this drug.
+    """
+    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LE_TABLE}"
+    bq_client = get_bq_client()
+
+    source_filter = (
+        "AND ENDS_WITH(IFNULL(trial_id, ''), ' + fda')" if source == "fda"
+        else "AND NOT ENDS_WITH(IFNULL(trial_id, ''), ' + fda')"
+    )
+
+    query = f"""
+        SELECT drug_name, indication, llm_ot_name, indication_type, therapy_area,
+               rationale, trial_id, trial_title, phase, dosage, trial_size,
+               trial_location, source_url, data_source
+        FROM `{table_id}`
+        WHERE LOWER(drug_name) = LOWER(@drug_name)
+          AND LOWER(IFNULL(data_source, '')) = 'trials'
+          {source_filter}
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ScalarQueryParameter("drug_name", "STRING", drug_name)]
+    )
+    try:
+        results = bq_client.query(query, job_config=job_config).result()
+        rows = [dict(row) for row in results]
+    except Exception:
+        logger.info(
+            "[LE_BQ] %s does not exist yet or has no %s-sourced rows for '%s' — nothing to reprocess",
+            LE_TABLE, source, drug_name,
+        )
+        return []
+
+    logger.info(
+        "[LE_BQ] Fetched %d existing %s-sourced row(s) for '%s' to reprocess",
+        len(rows), source, drug_name,
+    )
+    return rows
+
+
+# ==============================
 # MERGE
 # ==============================
 def merge_results(trial_rows: list[dict], web_rows: list[dict]) -> list[dict]:
