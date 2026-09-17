@@ -89,6 +89,8 @@ def fetch_le_rows(drug_name: str = DRUG_NAME, secondary_only: bool = False) -> l
                source_url, data_source
         FROM `{table_id}`
         WHERE LOWER(drug_name) = LOWER(@drug_name)
+          AND indication IS NOT NULL
+          AND indication != 'Unknown (extraction failed)'
           {secondary_filter}
     """
     job_config = bigquery.QueryJobConfig(
