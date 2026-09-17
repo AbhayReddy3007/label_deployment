@@ -301,12 +301,22 @@ Indications to classify:
 {indications_json}
 
 STEP 1 - Research the drug: what it is primarily approved/developed for,
-FDA/EMA approved labels, and the originator's pipeline.
+FDA/EMA approved labels, and the originator's pipeline. Check ALL of its
+current approved indications - a drug can be approved for MORE THAN ONE
+indication at the same time (e.g. tirzepatide is approved for both type 2
+diabetes AND obesity/weight management - both are Primary, not just the
+first one approved).
 
 STEP 2 - Classify each indication.
   indication_type:
-    "Primary"   - one of the drug's main approved or originally intended indications.
-    "Secondary" - a label expansion beyond the primary use.
+    "Primary"   - ANY indication that is currently part of the drug's
+                  approved label (FDA/EMA/etc.), or, for clinical-stage
+                  assets, one of its originally intended indications.
+                  Do not restrict this to a single indication - list every
+                  currently-approved use as Primary.
+    "Secondary" - a genuine label-expansion candidate: NOT currently part
+                  of the drug's approved label and not one of its
+                  originally intended indications.
                   {SECONDARY_INDICATION_CRITERIA}
   therapy_area:
     Choose from: Metabolic, Cardiovascular, Oncology, Neuroscience,
