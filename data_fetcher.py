@@ -11,16 +11,23 @@ the scoring model needs:
   ``primary_region``, ``drug_arm_size_n``, ``dosage`` (trial-sourced rows only):
       1. Values already present on the LE_TABLE row (``dosage``,
          ``trial_size``, ``trial_location`` — aliased to ``primary_region``).
-      2. Anything still missing is looked up by ``trial_id`` in
+      2. Anything still missing is looked up in ``DATA_FETCHER_TABLE`` —
+         a cache of everything this module has already fetched/searched
+         for on a previous run, keyed by ``trial_id``. A cache hit means
+         no lookup or search is repeated for that trial.
+      3. Anything still missing is looked up by ``trial_id`` in
          ``CLINICAL_TRIALS_SERIOUS_SAFETY_DATA``.
-      3. Anything still missing after that is filled via Gemini + Google
+      4. Anything still missing after that is filled via Gemini + Google
          Search grounding.
+      Whatever gets resolved in steps 3-4 is written back into
+      ``DATA_FETCHER_TABLE`` so future runs hit the cache instead.
 """
 
 from __future__ import annotations
 
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime, timezone
 
 from google.cloud import bigquery
 
@@ -38,6 +45,11 @@ from ..ot_mapping.moa_mapping import fetch_moa_for_drug
 from ..ot_mapping.ot_utils import OT_DISEASE_TABLE, OT_MOA_TABLE, fetch_existing_mappings, ot_post
 
 logger = logging.getLogger(__name__)
+
+# ==============================
+# TABLE NAMES
+# ==============================
+DATA_FETCHER_TABLE = "data_fetched_le"
 
 # ==============================
 # CONSTANTS
@@ -236,6 +248,142 @@ def apply_association_scores(rows: list[dict], drug_name: str, drug_details_tabl
 
 
 # ==============================
+# STEP 2.5: DATA_FETCHER_TABLE CACHE (avoid re-fetching/re-searching)
+# ==============================
+DATA_FETCHER_SCHEMA: list[bigquery.SchemaField] = [
+    bigquery.SchemaField("trial_id", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("primary_region", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("drug_arm_size_n", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("dosage", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("created_at", "TIMESTAMP", mode="NULLABLE"),
+    bigquery.SchemaField("updated_at", "TIMESTAMP", mode="NULLABLE"),
+]
+
+
+def _ensure_data_fetcher_table_exists(bq_client: bigquery.Client, table_id: str) -> None:
+    """Creates ``DATA_FETCHER_TABLE`` if missing, and patches in any columns
+    from ``DATA_FETCHER_SCHEMA`` that an already-existing table lacks."""
+    table = bigquery.Table(table_id, schema=DATA_FETCHER_SCHEMA)
+    table = bq_client.create_table(table, exists_ok=True)
+
+    existing_field_names = {f.name for f in table.schema}
+    missing_fields = [f for f in DATA_FETCHER_SCHEMA if f.name not in existing_field_names]
+    if missing_fields:
+        logger.info(
+            "[DATA_FETCHER] Table %s is missing column(s) %s - adding them now.",
+            table_id, ", ".join(f.name for f in missing_fields),
+        )
+        table.schema = list(table.schema) + missing_fields
+        bq_client.update_table(table, ["schema"])
+
+
+def fetch_cached_enrichment(trial_ids: list[str]) -> dict[str, dict]:
+    """Looks up trial-level enrichment fields already fetched on a
+    previous run, from ``DATA_FETCHER_TABLE``. Returns
+    ``{normalized_trial_id: {primary_region, drug_arm_size_n, dosage}}``.
+
+    Any trial found here does not need to be looked up again in
+    ``CLINICAL_TRIALS_SERIOUS_SAFETY_DATA`` or re-searched via Gemini.
+    """
+    if not trial_ids:
+        return {}
+
+    bq_client = get_bq_client()
+    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{DATA_FETCHER_TABLE}"
+
+    query = f"""
+        SELECT trial_id, primary_region, drug_arm_size_n, dosage
+        FROM `{table_id}`
+        WHERE trial_id IN UNNEST(@trial_ids)
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ArrayQueryParameter("trial_ids", "STRING", trial_ids)]
+    )
+    try:
+        results = bq_client.query(query, job_config=job_config).result()
+    except Exception:
+        logger.info(
+            "[DATA_FETCHER] %s does not exist yet or has no rows - treating all trials as new",
+            DATA_FETCHER_TABLE,
+        )
+        return {}
+
+    cached = {
+        row["trial_id"]: {
+            "primary_region": row.get("primary_region"),
+            "drug_arm_size_n": row.get("drug_arm_size_n"),
+            "dosage": row.get("dosage"),
+        }
+        for row in results
+        if row.get("trial_id")
+    }
+    logger.info(
+        "[DATA_FETCHER] %s: found %d/%d trial(s) already cached - skipping re-fetch for those",
+        DATA_FETCHER_TABLE, len(cached), len(trial_ids),
+    )
+    return cached
+
+
+def _as_str(value):
+    """Coerces a value to str for a BigQuery STRING parameter, preserving
+    None (BigQuery accepts None for a NULLABLE parameter)."""
+    if value is None:
+        return None
+    return str(value)
+
+
+def save_enrichment_cache(enrichment: dict[str, dict]) -> None:
+    """Upserts newly-fetched trial-level enrichment fields into
+    ``DATA_FETCHER_TABLE`` (keyed on ``trial_id``), so a future run can
+    reuse them instead of looking them up or searching for them again."""
+    if not enrichment:
+        return
+
+    bq_client = get_bq_client()
+    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{DATA_FETCHER_TABLE}"
+    _ensure_data_fetcher_table_exists(bq_client, table_id)
+
+    now = datetime.now(timezone.utc).isoformat()
+    struct_params = [
+        bigquery.StructQueryParameter(
+            None,
+            bigquery.ScalarQueryParameter("trial_id", "STRING", tid),
+            bigquery.ScalarQueryParameter("primary_region", "STRING", _as_str(entry.get("primary_region"))),
+            bigquery.ScalarQueryParameter("drug_arm_size_n", "STRING", _as_str(entry.get("drug_arm_size_n"))),
+            bigquery.ScalarQueryParameter("dosage", "STRING", _as_str(entry.get("dosage"))),
+            bigquery.ScalarQueryParameter("updated_at", "TIMESTAMP", now),
+        )
+        for tid, entry in enrichment.items()
+        if tid
+    ]
+    if not struct_params:
+        return
+
+    merge_query = f"""
+        MERGE `{table_id}` T
+        USING (SELECT * FROM UNNEST(@rows)) S
+        ON T.trial_id = S.trial_id
+        WHEN MATCHED THEN
+            UPDATE SET
+                primary_region = S.primary_region,
+                drug_arm_size_n = S.drug_arm_size_n,
+                dosage = S.dosage,
+                updated_at = S.updated_at
+        WHEN NOT MATCHED THEN
+            INSERT (trial_id, primary_region, drug_arm_size_n, dosage, created_at, updated_at)
+            VALUES (S.trial_id, S.primary_region, S.drug_arm_size_n, S.dosage, S.updated_at, S.updated_at)
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ArrayQueryParameter("rows", "STRUCT", struct_params)]
+    )
+    bq_client.query(merge_query, job_config=job_config).result()
+    logger.info(
+        "[DATA_FETCHER] Cached enrichment for %d trial(s) into %s for future runs",
+        len(struct_params), DATA_FETCHER_TABLE,
+    )
+
+
+# ==============================
 # STEP 3: BQ ENRICHMENT FROM CLINICAL_TRIALS_SERIOUS_SAFETY_DATA
 # ==============================
 def fetch_serious_safety_data(trial_ids: list[str]) -> dict[str, dict]:
@@ -430,16 +578,39 @@ def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, drug_details_table: 
             len(trials_needing_fill), len(trial_rows), trials_needing_fill,
         )
 
-        # Step 3: CLINICAL_TRIALS_SERIOUS_SAFETY_DATA
-        bq_enrichment = fetch_serious_safety_data(trials_needing_fill)
+        # Step 2.5: DATA_FETCHER_TABLE cache - reuse anything already fetched
+        # on a previous run instead of looking it up or searching again.
+        cached_enrichment = fetch_cached_enrichment(trials_needing_fill)
         for r in trial_rows:
             norm_id = _normalize_trial_id(r.get("trial_id"))
-            entry = bq_enrichment.get(norm_id)
+            entry = cached_enrichment.get(norm_id)
             if not entry:
                 continue
             for field in TRIAL_ENRICHMENT_FIELDS:
                 if _is_missing(r.get(field)) and not _is_missing(entry.get(field)):
                     r[field] = entry[field]
+
+        newly_fetched: dict[str, dict] = {}
+
+        # Step 3: CLINICAL_TRIALS_SERIOUS_SAFETY_DATA - only for trials not
+        # already resolved by the cache above.
+        still_needs_bq = sorted({
+            _normalize_trial_id(r["trial_id"])
+            for r in trial_rows
+            if r.get("trial_id") and _needs_fill(r)
+        })
+        if still_needs_bq:
+            bq_enrichment = fetch_serious_safety_data(still_needs_bq)
+            for r in trial_rows:
+                norm_id = _normalize_trial_id(r.get("trial_id"))
+                entry = bq_enrichment.get(norm_id)
+                if not entry:
+                    continue
+                for field in TRIAL_ENRICHMENT_FIELDS:
+                    if _is_missing(r.get(field)) and not _is_missing(entry.get(field)):
+                        r[field] = entry[field]
+                if norm_id in still_needs_bq:
+                    newly_fetched.setdefault(norm_id, {}).update(entry)
 
         # Step 4: Gemini fallback for whatever's still missing
         still_missing = sorted({
@@ -457,6 +628,13 @@ def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, drug_details_table: 
                 for field in TRIAL_ENRICHMENT_FIELDS:
                     if _is_missing(r.get(field)) and not _is_missing(entry.get(field)):
                         r[field] = entry[field]
+                if norm_id in still_missing:
+                    newly_fetched.setdefault(norm_id, {}).update(entry)
+
+        # Save whatever was newly resolved this run (BQ safety-data lookup
+        # or Gemini) into DATA_FETCHER_TABLE, so a future run can reuse it
+        # directly instead of fetching/searching for it again.
+        save_enrichment_cache(newly_fetched)
     else:
         logger.info("[DATA_FETCHER] All trial rows already fully populated - no trial-level enrichment needed")
 
