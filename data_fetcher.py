@@ -41,6 +41,7 @@ from medical_potential.gcp_utils import get_bq_client
 
 from ..bq_utils import LE_TABLE
 from ..indication_extractor.utils import extract_json, gemini_generate_with_timeout
+from ..ot_mapping.indication_mapping import normalize_indication
 from ..ot_mapping.moa_mapping import fetch_moa_for_drug
 from ..ot_mapping.ot_utils import OT_DISEASE_TABLE, OT_MOA_TABLE, fetch_existing_mappings, ot_post
 
@@ -237,10 +238,22 @@ def apply_association_scores(rows: list[dict], drug_name: str, drug_details_tabl
     disease_scores = fetch_ot_association_scores(target_ids)
     disease_map = fetch_existing_mappings(OT_DISEASE_TABLE, "indication")
 
+    # Also key by normalized text so a row whose raw indication text is a
+    # spelling/hyphenation/casing variant (e.g. "Pre-diabetes") still finds
+    # the mapping stored under a different raw variant (e.g. "Prediabetes")
+    # - matching the same normalized-key fallback trial_selector uses when
+    # building ta_i, so a genuinely-mapped indication doesn't lose its
+    # association_score purely due to text formatting differences.
+    norm_disease_map: dict[str, dict] = {}
+    for raw_key, entry in disease_map.items():
+        norm_disease_map.setdefault(normalize_indication(raw_key), entry)
+
     resolved = 0
     for r in rows:
         indication_key = (r.get("indication") or "").strip().lower()
         disease_entry = disease_map.get(indication_key)
+        if not disease_entry:
+            disease_entry = norm_disease_map.get(normalize_indication(r.get("indication") or ""))
         disease_id = disease_entry.get("ot_disease_id") if disease_entry else None
         score = disease_scores.get(disease_id) if disease_id else None
         r["association_score"] = score
