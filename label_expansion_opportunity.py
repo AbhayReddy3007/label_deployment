@@ -6,7 +6,8 @@ Runs the full label-expansion pipeline for exactly one drug:
     1.  Extract indications from registered clinical trials (trial_analyser).
     1b. Fetch FDA-approved indications (fda_fetcher).
     2.  Extract indications from public web sources (web_analyser).
-    3.  Merge and de-duplicate results, push merged rows to BigQuery.
+    3.  Filter non-scorable indications, merge and de-duplicate results,
+        push merged rows to BigQuery.
 
 **Open Targets Mapping (Steps 4-5) — Secondary indications only:**
     4.  Resolve the drug's Mechanism(s) of Action to OT target names.
@@ -27,6 +28,7 @@ from medical_potential.config import DRUG_NAME
 
 from .bq_utils import merge_results, push_to_bigquery
 from .indication_extractor import analyse_trials, analyse_web, analyse_fda
+from .indication_extractor.utils import filter_scorable_indications
 from .ot_mapping import run_moa_mapping, run_indication_mapping
 from .scoring import run_score_calculation
 
@@ -58,8 +60,10 @@ def label_expansion(
             the openFDA API, with phase = Approved and data_source = Trials.
         2.  Module 2 — web_analyser: uses Gemini + Google Search to find
             label-expansion signals from public web sources.
-        3.  Merge & push: de-duplicates on (drug_name, indication, trial_id),
-            preferring trial-sourced rows, and upserts into BigQuery.
+        3.  Filter & merge & push: drops rows whose "indication" is really a
+            trial endpoint/biomarker/PK parameter/procedure, de-duplicates on
+            (drug_name, indication, trial_id) preferring trial-sourced rows,
+            and upserts into BigQuery.
 
     **Open Targets Mapping (Steps 4-5) — Secondary indications only:**
         4.  MOA mapping: fetches Mechanism_of_Action from drug_details table,
@@ -115,7 +119,7 @@ def label_expansion(
     web_rows = analyse_web(drug_name)
     logger.info("[LABEL_EXPANSION] Step 2 complete: %d web-sourced row(s)", len(web_rows))
 
-    # ── Step 3: Merge & push to BigQuery ───────────────────────────────────
+    # ── Step 3: Filter non-scorable indications, merge & push to BigQuery ──
     if not all_trial_rows and not web_rows:
         logger.warning(
             "[LABEL_EXPANSION] All modules returned no results for '%s' — nothing to push",
@@ -123,8 +127,19 @@ def label_expansion(
         )
         merged_rows = []
     else:
-        logger.info("[LABEL_EXPANSION] Step 3: Merge and push results to BigQuery")
-        merged_rows = merge_results(all_trial_rows, web_rows)
+        logger.info("[LABEL_EXPANSION] Step 3: Filter non-scorable indications, merge and push results to BigQuery")
+        combined_rows = all_trial_rows + web_rows
+        before_count = len(combined_rows)
+        scorable_rows = filter_scorable_indications(combined_rows)
+        if len(scorable_rows) != before_count:
+            logger.info(
+                "[LABEL_EXPANSION] Filtered out %d non-scorable row(s) (endpoints/biomarkers/PK/procedures)",
+                before_count - len(scorable_rows),
+            )
+        trial_rows_scorable = [r for r in scorable_rows if (r.get("data_source") or "").strip().lower() == "trials"]
+        web_rows_scorable = [r for r in scorable_rows if (r.get("data_source") or "").strip().lower() != "trials"]
+
+        merged_rows = merge_results(trial_rows_scorable, web_rows_scorable)
         push_to_bigquery(merged_rows)
         logger.info("[LABEL_EXPANSION] Step 3 complete: %d merged row(s) pushed", len(merged_rows))
 
