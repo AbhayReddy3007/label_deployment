@@ -811,6 +811,63 @@ Return ONLY a JSON array - no markdown fences, no explanation:
         return {ind.lower(): True for ind, _ in pairs}
 
 
+def revalidate_existing_mappings(drug_name: str, secondary_only: bool = False) -> dict:
+    """Re-checks ALL of this drug's already-resolved (non-null) mappings
+    in ``OT_DISEASE_TABLE`` against the current QC validation logic, and
+    nulls out (upserts) any that fail.
+
+    ``validate_resolved_mappings`` normally only checks mappings resolved
+    in the SAME run it's called from - it never re-examines a mapping
+    that was already sitting in the table, however wrong. That means a
+    bad match resolved before validation existed (or before an
+    improvement to it) stays wrong forever unless something re-checks it
+    explicitly. This is that explicit re-check: call it on demand (e.g.
+    after improving the validation prompt, or when a wrong mapping like
+    "Malignant Solid Neoplasm" -> "malignant endocrine neoplasm" is
+    spotted) to clean up the whole table for one drug in one pass.
+
+    Nulled-out indications will be re-attempted by Path A/B/C on the
+    next ``run_indication_mapping`` call (nulls are excluded from the
+    "already resolved" check there).
+
+    Returns a dict summary: ``{"checked": int, "rejected": [indication, ...]}``.
+    """
+    logger.info("[IND_MAPPING] Re-validating existing mappings for '%s'", drug_name)
+
+    fetched = fetch_indications_for_drug(drug_name, secondary_only=secondary_only)
+    if not fetched:
+        logger.warning("[IND_MAPPING] No indications found for '%s' - nothing to re-validate", drug_name)
+        return {"checked": 0, "rejected": []}
+
+    existing_raw = fetch_existing_mappings(OT_DISEASE_TABLE, "indication")
+    indications = [f["indication"] for f in fetched]
+
+    to_check: dict[str, tuple[str | None, str | None]] = {}
+    for ind in indications:
+        entry = existing_raw.get(ind.strip().lower())
+        if entry and entry.get("ot_disease") and entry.get("ot_disease_id"):
+            to_check[ind] = (entry["ot_disease_id"], entry["ot_disease"])
+
+    if not to_check:
+        logger.info("[IND_MAPPING] No non-null existing mappings for '%s' to re-validate", drug_name)
+        return {"checked": 0, "rejected": []}
+
+    revalidated = validate_resolved_mappings(to_check)
+    rejected = [ind for ind, (did, _name) in revalidated.items() if not did]
+
+    if rejected:
+        logger.warning(
+            "[IND_MAPPING] Re-validation rejected %d previously-accepted mapping(s) for '%s': %s",
+            len(rejected), drug_name, rejected,
+        )
+        rejected_rows = [{"indication": ind, "ot_disease": None, "ot_disease_id": None} for ind in rejected]
+        push_mappings(OT_DISEASE_TABLE, OT_DISEASE_SCHEMA, rejected_rows)
+    else:
+        logger.info("[IND_MAPPING] Re-validation: all %d checked mapping(s) for '%s' still hold up", len(to_check), drug_name)
+
+    return {"checked": len(to_check), "rejected": rejected}
+
+
 def validate_resolved_mappings(
     resolved: dict[str, tuple[str | None, str | None]],
 ) -> dict[str, tuple[str | None, str | None]]:
