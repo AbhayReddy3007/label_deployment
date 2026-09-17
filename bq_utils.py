@@ -85,14 +85,17 @@ def _normalize_trial_id(trial_id) -> str:
 def fetch_existing_indication_rows(drug_name: str, source: str = "trial") -> list[dict]:
     """Fetches this drug's existing ``LE_TABLE`` rows in full, for
     ``PROCESS_INDICATIONS`` reprocessing (re-classification without
-    re-extraction).
+    re-extraction/re-searching).
 
     Args:
         drug_name: the drug/molecule name.
-        source: ``"trial"`` for genuine trial-sourced rows (``trial_id``
-            does NOT end in ``" + fda"``) - used by ``trial_analyser``.
-            ``"fda"`` for FDA-sourced rows (``trial_id`` DOES end in
-            ``" + fda"``) - used by ``fda_fetcher``.
+        source: ``"trial"`` for genuine trial-sourced rows (``data_source
+            = 'Trials'`` and ``trial_id`` does NOT end in ``" + fda"``) -
+            used by ``trial_analyser``. ``"fda"`` for FDA-sourced rows
+            (``data_source = 'Trials'`` and ``trial_id`` DOES end in
+            ``" + fda"``) - used by ``fda_fetcher``. ``"web"`` for
+            web-sourced rows (``data_source = 'Web'``) - used by
+            ``web_analyser``.
 
     Returns an empty list if the table doesn't exist yet or has no
     matching rows for this drug.
@@ -100,10 +103,18 @@ def fetch_existing_indication_rows(drug_name: str, source: str = "trial") -> lis
     table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LE_TABLE}"
     bq_client = get_bq_client()
 
-    source_filter = (
-        "AND ENDS_WITH(IFNULL(trial_id, ''), ' + fda')" if source == "fda"
-        else "AND NOT ENDS_WITH(IFNULL(trial_id, ''), ' + fda')"
-    )
+    if source == "web":
+        data_source_filter = "AND LOWER(IFNULL(data_source, '')) = 'web'"
+    elif source == "fda":
+        data_source_filter = (
+            "AND LOWER(IFNULL(data_source, '')) = 'trials' "
+            "AND ENDS_WITH(IFNULL(trial_id, ''), ' + fda')"
+        )
+    else:
+        data_source_filter = (
+            "AND LOWER(IFNULL(data_source, '')) = 'trials' "
+            "AND NOT ENDS_WITH(IFNULL(trial_id, ''), ' + fda')"
+        )
 
     query = f"""
         SELECT drug_name, indication, llm_ot_name, indication_type, therapy_area,
@@ -111,8 +122,7 @@ def fetch_existing_indication_rows(drug_name: str, source: str = "trial") -> lis
                trial_location, source_url, data_source
         FROM `{table_id}`
         WHERE LOWER(drug_name) = LOWER(@drug_name)
-          AND LOWER(IFNULL(data_source, '')) = 'trials'
-          {source_filter}
+          {data_source_filter}
     """
     job_config = bigquery.QueryJobConfig(
         query_parameters=[bigquery.ScalarQueryParameter("drug_name", "STRING", drug_name)]
