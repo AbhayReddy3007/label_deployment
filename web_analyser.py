@@ -14,10 +14,14 @@ import logging
 
 from medical_potential.config import DRUG_NAME
 from medical_potential.label_expansion_opportunity.indication_extractor.utils import (
+    INDICATIONS_PER_CALL,
+    PROCESS_INDICATIONS,
     SECONDARY_INDICATION_CRITERIA,
     extract_json,
     gemini_generate,
 )
+
+from ..bq_utils import fetch_existing_indication_rows
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +95,143 @@ def _fetch_opportunities(drug_name: str) -> list[dict]:
 
 
 # ==============================
+# PROCESS_INDICATIONS MODE: RECLASSIFY WITHOUT RE-SEARCHING THE WEB
+# ==============================
+def _classify_web_indication_batch(drug_name: str, indication_batch: list[str]) -> dict[str, dict]:
+    """Re-classifies up to ``INDICATIONS_PER_CALL`` already-known web
+    indications in a single Gemini call - indication_type, therapy_area,
+    and ot_disease_name - WITHOUT re-running the full web-research prompt.
+    Still uses Search grounding (to check current approval status), but
+    is far cheaper than ``_fetch_opportunities``'s open-ended research
+    pass since it only classifies indications already given to it rather
+    than discovering new ones from scratch.
+    """
+    if not indication_batch:
+        return {}
+
+    import json as _json
+
+    indications_json = _json.dumps(indication_batch, indent=2)
+    prompt = f"""You are a pharmaceutical analyst. Research the drug "{drug_name}" and
+re-classify each of the following previously-identified indications.
+
+Indications to classify:
+{indications_json}
+
+STEP 1 - Research the drug: what it is primarily approved/developed for,
+FDA/EMA approved labels, and the originator's pipeline.
+
+STEP 2 - Classify each indication.
+  indication_type — you MUST choose exactly one of these two values:
+    "Primary"   - one of the drug's main approved or originally intended indications.
+    "Secondary" - a label expansion beyond the primary use.
+                  {SECONDARY_INDICATION_CRITERIA}
+  Do NOT use any other value. If unsure, classify as "Secondary". Never
+  use "None", "Not Applicable", "Not Classified", null, or any other label.
+  therapy_area:
+    Choose from: Metabolic, Cardiovascular, Oncology, Neuroscience,
+    Immunology, Respiratory, Nephrology, Hepatology, Ophthalmology,
+    Musculoskeletal, Gastroenterology, Infectious Disease, Dermatology,
+    Hematology, Endocrinology, Rare Disease, or another appropriate area.
+  ot_disease_name: your best guess of this indication's standardized Open
+    Targets (EFO/MONDO) disease name. If not confident, use null.
+
+Return ONLY valid JSON:
+{{
+  "classifications": [
+    {{"indication": "<exact indication name from input list>",
+      "indication_type": "Primary" or "Secondary",
+      "therapy_area": "<therapy area>",
+      "ot_disease_name": "<Open Targets disease name, or null>",
+      "rationale": "<why, citing the specific evidence you found>"}}
+  ]
+}}
+"""
+    try:
+        text = gemini_generate(
+            prompt,
+            system_instruction=(
+                "You are a pharmaceutical analyst. Search the web to find what this drug "
+                "is approved for. Return ONLY valid JSON."
+            ),
+            use_search=True,
+        )
+        data = extract_json(text)
+        classifications = data.get("classifications", [])
+        _VALID_TYPES = {"primary", "secondary"}
+        result = {
+            (c.get("indication") or "").strip().lower(): {
+                "indication_type": c.get("indication_type", "Secondary")
+                    if (c.get("indication_type") or "").strip().lower() in _VALID_TYPES
+                    else "Secondary",
+                "therapy_area": c.get("therapy_area", "Other"),
+                "ot_disease_name": c.get("ot_disease_name"),
+                "rationale": c.get("rationale", ""),
+            }
+            for c in classifications
+            if (c.get("indication") or "").strip()
+        }
+        for ind in indication_batch:
+            result.setdefault(ind.lower(), {"indication_type": "Secondary", "therapy_area": "Other", "ot_disease_name": None, "rationale": ""})
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[WEB_ANALYSER] Reclassification failed for '%s' batch %s: %s", drug_name, indication_batch, exc)
+        return {
+            ind.lower(): {"indication_type": "Secondary", "therapy_area": "Other", "ot_disease_name": None, "rationale": f"Classification failed: {exc}"}
+            for ind in indication_batch
+        }
+
+
+def _reprocess_existing_indications(drug_name: str) -> list[dict]:
+    """Re-classifies web-sourced indications already sitting in
+    ``LE_TABLE`` for this drug instead of re-running the full web-search
+    research pass. One (or a few) batched classify call(s) over the
+    unique indications, versus one open-ended research call - much
+    cheaper, at the cost of not discovering any new web-sourced
+    opportunities that aren't already stored.
+    """
+    logger.info(
+        "[WEB_ANALYSER] PROCESS_INDICATIONS=True — reprocessing existing web indications for '%s' "
+        "instead of re-running web research",
+        drug_name,
+    )
+    existing_rows = fetch_existing_indication_rows(drug_name, source="web")
+    if not existing_rows:
+        logger.warning(
+            "[WEB_ANALYSER] No existing web-sourced rows found in LE_TABLE for '%s' to reprocess",
+            drug_name,
+        )
+        return []
+
+    unique_indications = sorted({
+        (r.get("indication") or "").strip()
+        for r in existing_rows
+        if (r.get("indication") or "").strip()
+    })
+    batches = [
+        unique_indications[i : i + INDICATIONS_PER_CALL]
+        for i in range(0, len(unique_indications), INDICATIONS_PER_CALL)
+    ]
+    classification_map: dict[str, dict] = {}
+    for batch in batches:
+        classification_map.update(_classify_web_indication_batch(drug_name, batch))
+
+    for row in existing_rows:
+        cls = classification_map.get((row.get("indication") or "").strip().lower(), {})
+        if cls:
+            row["indication_type"] = cls.get("indication_type", row.get("indication_type", ""))
+            row["therapy_area"] = cls.get("therapy_area", row.get("therapy_area", ""))
+            row["llm_ot_name"] = cls.get("ot_disease_name") or row.get("llm_ot_name")
+            row["rationale"] = row.get("rationale") or cls.get("rationale", "")
+
+    logger.info(
+        "[WEB_ANALYSER] Reprocessed %d existing row(s) for '%s'",
+        len(existing_rows), drug_name,
+    )
+    return existing_rows
+
+
+# ==============================
 # ENTRY POINT FOR THIS MODULE
 # ==============================
 def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
@@ -98,6 +239,11 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
 
     ``drug_name`` must be a single drug name (str) - not a list. To
     analyse multiple drugs, call this once per drug from the caller.
+
+    If ``PROCESS_INDICATIONS`` (in ``utils.py``) is ``True``, skips the
+    full web-research pass entirely, and instead re-classifies the
+    web-sourced indications already sitting in ``LE_TABLE`` for this
+    drug - see ``_reprocess_existing_indications``.
 
     Returns a flat list of row dicts. Rows have no ``trial_id``/
     ``trial_title``/``phase`` since they aren't sourced from a
@@ -107,6 +253,9 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
         raise TypeError(
             f"web_analyser.analyse() accepts exactly one drug name (str), got: {drug_name!r}"
         )
+
+    if PROCESS_INDICATIONS:
+        return _reprocess_existing_indications(drug_name)
 
     logger.info("[WEB_ANALYSER] Starting web research for '%s'", drug_name)
     opportunities = _fetch_opportunities(drug_name)
