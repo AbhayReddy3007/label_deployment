@@ -18,6 +18,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 
 from dotenv import load_dotenv
@@ -139,6 +140,68 @@ def gemini_generate(prompt: str, *, system_instruction: str = "", use_search: bo
     if last_err:
         raise last_err
     return ""
+
+
+def gemini_generate_with_timeout(
+    prompt: str,
+    *,
+    system_instruction: str = "",
+    use_search: bool = True,
+    timeout_seconds: float,
+    max_attempts: int = 2,
+    log_context: str = "",
+) -> str:
+    """Runs ``gemini_generate`` in a background thread with a hard wall-clock
+    timeout, retrying up to ``max_attempts`` times if it doesn't come back
+    in time.
+
+    Shared by any caller that batches Gemini calls (e.g. trial_analyser's
+    per-batch extraction, data_fetcher's enrichment fallback) so batches
+    that legitimately need more time get it, without one hung batch
+    blocking a whole run.
+
+    Raises ``TimeoutError`` if every attempt times out, or re-raises
+    whatever ``gemini_generate`` itself raised.
+    """
+    result_holder: dict = {}
+    error_holder: dict = {}
+    context_suffix = f" for {log_context}" if log_context else ""
+
+    for attempt in range(1, max_attempts + 1):
+        result_holder.clear()
+        error_holder.clear()
+
+        def _call_gemini():
+            try:
+                result_holder["text"] = gemini_generate(
+                    prompt, system_instruction=system_instruction, use_search=use_search,
+                )
+            except Exception as exc:  # noqa: BLE001
+                error_holder["error"] = exc
+
+        thread = threading.Thread(target=_call_gemini, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout_seconds)
+
+        if not thread.is_alive():
+            break  # got a response (success or error) within the timeout
+
+        if attempt < max_attempts:
+            logger.warning(
+                "[UTILS] Timeout (>%ss) on attempt %d/%d%s - retrying",
+                timeout_seconds, attempt, max_attempts, context_suffix,
+            )
+        else:
+            logger.warning(
+                "[UTILS] Timeout (>%ss) on attempt %d/%d%s - giving up",
+                timeout_seconds, attempt, max_attempts, context_suffix,
+            )
+            raise TimeoutError(f"Gemini call timed out after {max_attempts} attempt(s){context_suffix}")
+
+    if "error" in error_holder:
+        raise error_holder["error"]
+
+    return result_holder.get("text", "")
 
 
 def extract_json(text: str) -> dict | list:
