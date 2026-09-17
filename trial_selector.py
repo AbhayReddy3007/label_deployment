@@ -25,6 +25,7 @@ import pandas as pd
 
 from medical_potential.config import DRUG_NAME
 
+from ..ot_mapping.indication_mapping import normalize_indication
 from ..ot_mapping.ot_utils import OT_DISEASE_TABLE, fetch_existing_mappings
 from .data_fetcher import fetch_and_enrich_trial_data
 
@@ -165,15 +166,35 @@ def assign_dosage_scores(df: pd.DataFrame) -> pd.Series:
 # ==============================
 def _build_ta_i_column(df: pd.DataFrame, drug_name: str) -> pd.DataFrame:
     """Adds ``ot_disease_name`` (looked up from ``OT_DISEASE_TABLE``, falling
-    back to the raw indication if unresolved) and ``ta_i`` = therapy_area +
-    " - " + ot_disease_name."""
+    back to the **normalized** raw indication if unresolved) and ``ta_i`` =
+    therapy_area + " - " + ot_disease_name.
+
+    The normalization (lowercase, strip hyphens, strip parentheticals) on the
+    fallback path is critical: without it, casing/hyphenation/parenthetical
+    variants of the same unresolved disease (e.g. "Non-Alcoholic Fatty Liver
+    Disease", "Non-alcoholic fatty liver disease", "Non-alcoholic Fatty Liver
+    Disease (NAFLD)") each become their own ``ta_i`` and each produce a
+    separate scored row, inflating breadth metrics and duplicating results.
+    """
     existing_disease_map = fetch_existing_mappings(OT_DISEASE_TABLE, "indication")
 
+    # Also key by normalized text so "Pre-diabetes" finds the mapping
+    # pushed under "Prediabetes" (or vice versa).
+    norm_map: dict[str, dict] = {}
+    for raw_key, entry in existing_disease_map.items():
+        nk = normalize_indication(raw_key)
+        norm_map.setdefault(nk, entry)
+
     def _ot_name(indication: str) -> str:
-        entry = existing_disease_map.get((indication or "").strip().lower())
+        ind = (indication or "").strip()
+        # Try raw key first, then normalized key
+        entry = existing_disease_map.get(ind.lower())
+        if not entry:
+            entry = norm_map.get(normalize_indication(ind))
         if entry and entry.get("ot_disease"):
             return entry["ot_disease"]
-        return indication or ""
+        # Fallback: normalize the raw text so variants collapse
+        return normalize_indication(ind) or ind
 
     df["ot_disease_name"] = df["indication"].apply(_ot_name)
     df["ta_i"] = df["therapy_area"].astype(str) + " - " + df["ot_disease_name"].astype(str)
