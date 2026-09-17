@@ -21,6 +21,7 @@ from medical_potential.config import (
 from medical_potential.gcp_utils import get_bq_client
 from medical_potential.label_expansion_opportunity.indication_extractor.utils import (
     INDICATIONS_PER_CALL,
+    PROCESS_INDICATIONS,
     SECONDARY_INDICATION_CRITERIA,
     TRIALS_PER_CALL,
     extract_json,
@@ -28,7 +29,7 @@ from medical_potential.label_expansion_opportunity.indication_extractor.utils im
     gemini_generate_with_timeout,
 )
 
-from ..bq_utils import LE_TABLE, fetch_existing_trial_ids
+from ..bq_utils import LE_TABLE, fetch_existing_indication_rows, fetch_existing_trial_ids
 
 logger = logging.getLogger(__name__)
 
@@ -300,10 +301,14 @@ STEP 1 - Research the drug: what it is primarily approved/developed for,
 FDA/EMA approved labels, and the originator's pipeline.
 
 STEP 2 - Classify each indication.
-  indication_type:
+  indication_type — you MUST choose exactly one of these two values:
     "Primary"   - one of the drug's main approved or originally intended indications.
     "Secondary" - a label expansion beyond the primary use.
                   {SECONDARY_INDICATION_CRITERIA}
+  Do NOT use any other value for indication_type. If the indication seems
+  unrelated to the drug, irrelevant, or you are unsure, classify it as
+  "Secondary" (it will be filtered later if needed). Never use "None",
+  "Not Applicable", "Not Classified", null, or any other label.
   therapy_area:
     Choose from: Metabolic, Cardiovascular, Oncology, Neuroscience,
     Immunology, Respiratory, Nephrology, Hepatology, Ophthalmology,
@@ -331,9 +336,12 @@ Return ONLY valid JSON:
         )
         data = extract_json(text)
         classifications = data.get("classifications", [])
+        _VALID_TYPES = {"primary", "secondary"}
         result = {
             (c.get("indication") or "").strip().lower(): {
-                "indication_type": c.get("indication_type", "Secondary"),
+                "indication_type": c.get("indication_type", "Secondary")
+                    if (c.get("indication_type") or "").strip().lower() in _VALID_TYPES
+                    else "Secondary",
                 "therapy_area": c.get("therapy_area", "Other"),
                 "rationale": c.get("rationale", ""),
             }
@@ -391,6 +399,55 @@ def _classify_indications(drug_name: str, unique_indications: list[str]) -> dict
 
 
 # ==============================
+# PROCESS_INDICATIONS MODE: RECLASSIFY WITHOUT RE-EXTRACTING
+# ==============================
+def _reprocess_existing_indications(drug_name: str) -> list[dict]:
+    """Re-classifies indications already sitting in ``LE_TABLE`` for this
+    drug (trial-sourced rows only, not FDA rows) instead of re-fetching
+    trials and re-extracting via Gemini + Google Search. One batched
+    classify call over the unique indications, versus one search-grounded
+    extraction call per trial - much cheaper, at the cost of not
+    discovering any trials/indications that aren't already stored.
+
+    ``llm_ot_name``, ``trial_title``, ``phase``, and the other
+    trial-record fields are left exactly as already stored, since only
+    extraction (which is skipped here) can refresh them.
+    """
+    logger.info(
+        "[TRIAL_ANALYSER] PROCESS_INDICATIONS=True — reprocessing existing indications for '%s' "
+        "instead of re-fetching trials and re-extracting",
+        drug_name,
+    )
+    existing_rows = fetch_existing_indication_rows(drug_name, source="trial")
+    if not existing_rows:
+        logger.warning(
+            "[TRIAL_ANALYSER] No existing trial-sourced rows found in %s for '%s' to reprocess",
+            LE_TABLE, drug_name,
+        )
+        return []
+
+    unique_indications = sorted({
+        (r.get("indication") or "").strip()
+        for r in existing_rows
+        if (r.get("indication") or "").strip()
+    })
+    classification_map = _classify_indications(drug_name, unique_indications)
+
+    for row in existing_rows:
+        cls = classification_map.get((row.get("indication") or "").strip().lower(), {})
+        if cls:
+            row["indication_type"] = cls.get("indication_type", row.get("indication_type", ""))
+            row["therapy_area"] = cls.get("therapy_area", row.get("therapy_area", ""))
+            row["rationale"] = row.get("rationale") or cls.get("rationale", "")
+
+    logger.info(
+        "[TRIAL_ANALYSER] Reprocessed %d existing row(s) for '%s'",
+        len(existing_rows), drug_name,
+    )
+    return existing_rows
+
+
+# ==============================
 # ENTRY POINT FOR THIS MODULE
 # ==============================
 def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
@@ -399,12 +456,20 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
     ``drug_name`` must be a single drug name (str) - not a list. To
     analyse multiple drugs, call this once per drug from the caller.
 
+    If ``PROCESS_INDICATIONS`` (in ``utils.py``) is ``True``, skips
+    fetching trials and extracting indications entirely, and instead
+    re-classifies the indications already sitting in ``LE_TABLE`` for
+    this drug - see ``_reprocess_existing_indications``.
+
     Returns a flat list of row dicts, one per indication/trial.
     """
     if not isinstance(drug_name, str) or not drug_name.strip():
         raise TypeError(
             f"trial_analyser.analyse() accepts exactly one drug name (str), got: {drug_name!r}"
         )
+
+    if PROCESS_INDICATIONS:
+        return _reprocess_existing_indications(drug_name)
 
     logger.info("[TRIAL_ANALYSER] Starting trial analysis for '%s'", drug_name)
     trial_rows = fetch_trial_rows(drug_name)
