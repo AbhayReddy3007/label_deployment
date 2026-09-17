@@ -236,9 +236,14 @@ def push_mappings(
     table_name: str,
     schema: list[bigquery.SchemaField],
     rows: list[dict],
+    key_column: str = "indication",
 ) -> None:
-    """Inserts new mapping rows into the given table (append-only — caller
-    ensures only genuinely new values are passed)."""
+    """Upserts mapping rows into the given table, keyed on ``key_column``.
+
+    If a row for the same key already exists (e.g. a previously-null
+    mapping for an indication that has now been successfully resolved),
+    it is updated in place rather than duplicated. New keys are inserted.
+    """
     if not rows:
         logger.info("[OT_UTILS] No new mappings to push to %s — skipping.", table_name)
         return
@@ -251,8 +256,39 @@ def push_mappings(
         r.setdefault("created_at", now)
         r.setdefault("updated_at", now)
 
-    errors = bq_client.insert_rows_json(table_id, rows)
-    if errors:
-        logger.error("[OT_UTILS] Errors inserting rows into %s: %s", table_id, errors)
-    else:
-        logger.info("[OT_UTILS] Inserted %d new mapping(s) into %s", len(rows), table_id)
+    # Build the SET and INSERT/VALUES clauses dynamically from schema,
+    # excluding the key column and created_at (preserve original creation time).
+    non_key_fields = [f.name for f in schema if f.name not in (key_column, "created_at")]
+    update_set = ", ".join(f"{f} = S.{f}" for f in non_key_fields)
+    all_fields = [f.name for f in schema if f.name != "created_at"]
+    insert_cols = ", ".join(all_fields + ["created_at"])
+    insert_vals = ", ".join(f"S.{f}" for f in all_fields) + ", S.updated_at"
+
+    struct_params = []
+    for r in rows:
+        fields = [
+            bigquery.ScalarQueryParameter(f.name, f.field_type, r.get(f.name))
+            for f in schema
+            if f.name != "created_at"
+        ]
+        fields.append(bigquery.ScalarQueryParameter("updated_at", "TIMESTAMP", now))
+        struct_params.append(bigquery.StructQueryParameter(None, *fields))
+
+    if not struct_params:
+        return
+
+    merge_query = f"""
+        MERGE `{table_id}` T
+        USING (SELECT * FROM UNNEST(@rows)) S
+        ON T.{key_column} = S.{key_column}
+        WHEN MATCHED THEN
+            UPDATE SET {update_set}
+        WHEN NOT MATCHED THEN
+            INSERT ({insert_cols})
+            VALUES ({insert_vals})
+    """
+    job_config = bigquery.QueryJobConfig(
+        query_parameters=[bigquery.ArrayQueryParameter("rows", "STRUCT", struct_params)]
+    )
+    bq_client.query(merge_query, job_config=job_config).result()
+    logger.info("[OT_UTILS] Upserted %d mapping(s) into %s", len(rows), table_id)
