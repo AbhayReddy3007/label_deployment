@@ -39,16 +39,15 @@ logger = logging.getLogger(__name__)
 # expensive path (one search-grounded Gemini call per trial/brand).
 #
 # True: skip re-discovery and re-extraction entirely. Instead,
-# trial_analyser and fda_fetcher pull the indications already sitting in
-# LE_TABLE for the drug and only re-run classification (indication_type /
-# therapy_area / ot_disease_name) on them - one batched Gemini call over
-# the unique indications, not one call per trial/brand. Use this after a
+# trial_analyser, fda_fetcher, and web_analyser pull the indications
+# already sitting in LE_TABLE for the drug and only re-run classification
+# (indication_type / therapy_area / ot_disease_name) on them - one (or a
+# few) batched Gemini call(s) over the unique indications, not one call
+# per trial/brand or one open-ended web-research pass. Use this after a
 # classification prompt/logic change (e.g. fixing how Primary/Secondary
 # is decided) when you want existing rows re-classified with the fixed
 # logic without paying to re-discover indications that are already
-# correctly identified. Web-sourced rows are left untouched in this mode,
-# since web_analyser extracts and classifies in a single combined call -
-# there's no cheaper reprocess-only path for it.
+# correctly identified.
 PROCESS_INDICATIONS = False
 
 # ==============================
