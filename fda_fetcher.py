@@ -8,8 +8,6 @@ All FDA-sourced rows get:
     - ``phase``: ``"Approved"`` (FDA-approved = post-market)
     - ``trial_id``: ``"<indication> + fda"``
     - ``data_source``: ``"Trials"``
-    - ``indication_type``: ``"Primary"`` (FDA-approved indications are
-      by definition the drug's primary/approved uses)
 
 After extraction, a single Gemini call classifies each indication's
 ``therapy_area`` and marks any that are genuinely secondary (label
@@ -27,7 +25,7 @@ import requests
 
 from medical_potential.config import DRUG_NAME
 
-from .utils import extract_json, gemini_generate
+from .utils import SECONDARY_INDICATION_CRITERIA, extract_json, gemini_generate
 
 logger = logging.getLogger(__name__)
 
@@ -206,17 +204,8 @@ def _extract_disease_names(all_indications: list[str]) -> list[str]:
 # CLASSIFY THERAPY AREA
 # ==============================
 def _classify_indications(drug_name: str, disease_names: list[str]) -> list[dict]:
-    """Classifies each FDA indication's therapy_area via a single Gemini call.
-
-    Does NOT classify indication_type: every indication here comes directly
-    from the current FDA-approved label's ``indications_and_usage`` text
-    (see ``analyse()``), so it is by definition Primary/approved, regardless
-    of when it was added to the label. A drug can have multiple such
-    indications at once (e.g. tirzepatide is approved for both type 2
-    diabetes AND obesity - both are Primary), so no Primary/Secondary
-    decision is needed - the caller sets ``indication_type = "Primary"``
-    unconditionally.
-    """
+    """Classifies each FDA indication's therapy_area and indication_type
+    (Primary vs Secondary) via a single Gemini call."""
     if not disease_names:
         return []
 
@@ -226,21 +215,25 @@ def _classify_indications(drug_name: str, disease_names: list[str]) -> list[dict
 The drug "{drug_name}" has the following FDA-approved indications:
 {diseases_list}
 
-For each indication, determine its therapy_area: Metabolic, Cardiovascular,
-Oncology, Neuroscience, Immunology, Respiratory, Nephrology, Hepatology,
-Ophthalmology, Musculoskeletal, Gastroenterology, Infectious Disease,
-Dermatology, Hematology, Endocrinology, Rare Disease, or another
-appropriate area.
+For each indication, determine:
+1. indication_type:
+    "Primary"   - one of the drug's main approved or originally intended indications.
+    "Secondary" - a label expansion beyond the primary use.
+                  {SECONDARY_INDICATION_CRITERIA}
+2. therapy_area: Metabolic, Cardiovascular, Oncology, Neuroscience, Immunology,
+   Respiratory, Nephrology, Hepatology, Ophthalmology, Musculoskeletal,
+   Gastroenterology, Infectious Disease, Dermatology, Hematology, Endocrinology,
+   Rare Disease, or another appropriate area.
 
 Return ONLY a JSON array:
 [
-  {{"indication": "<disease>", "therapy_area": "<area>"}}
+  {{"indication": "<disease>", "therapy_area": "<area>", "indication_type": "Primary" or "Secondary"}}
 ]
 """
     try:
         text = gemini_generate(
             prompt,
-            system_instruction="Classify FDA indications by therapy area. Return ONLY valid JSON.",
+            system_instruction="Classify FDA indications by therapy area and primary/secondary status. Return ONLY valid JSON.",
             use_search=True,
         )
         parsed = extract_json(text)
@@ -302,6 +295,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
     logger.info("[FDA_FETCHER] %d unique disease/condition name(s) extracted", len(disease_names))
 
     # Step 4: Classify therapy area (indication_type is always "Primary" - see below)
+    # Step 4: Classify therapy area and indication type
     classifications = _classify_indications(drug_name, disease_names)
     classified_map = {
         (c.get("indication") or "").strip().lower(): c
@@ -316,12 +310,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
         flat_rows.append({
             "drug_name": drug_name,
             "indication": disease,
-            # Every row here is extracted directly from the current FDA
-            # label text, so it IS a currently-approved indication -
-            # always "Primary", regardless of when it was added to the
-            # label. A drug can have more than one Primary indication
-            # (e.g. tirzepatide: type 2 diabetes AND obesity).
-            "indication_type": "Primary",
+            "indication_type": classification.get("indication_type", "Primary"),
             "therapy_area": classification.get("therapy_area", "Other"),
             "rationale": "FDA-approved indication",
             "trial_title": None,
