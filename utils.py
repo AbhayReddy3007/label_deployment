@@ -89,11 +89,20 @@ def _is_transient(exc: Exception) -> bool:
     )
 
 
-def gemini_generate(prompt: str, *, system_instruction: str = "", use_search: bool = True) -> str:
+def gemini_generate(
+    prompt: str,
+    *,
+    system_instruction: str = "",
+    use_search: bool = True,
+    allow_ungrounded_fallback: bool = True,
+) -> str:
     """Calls Gemini with optional Google Search grounding.
 
     Retries transient errors with exponential backoff. If search grounding
-    returns nothing, falls back to a plain (non-grounded) call.
+    returns nothing (or fails), falls back to a plain (non-grounded) call —
+    unless ``allow_ungrounded_fallback`` is False, in which case an
+    empty/failed grounded response is left empty rather than retried
+    without grounding.
     """
     configs = []
     if use_search:
@@ -104,12 +113,13 @@ def gemini_generate(prompt: str, *, system_instruction: str = "", use_search: bo
                 system_instruction=system_instruction or "Return ONLY valid JSON.",
             )
         )
-    configs.append(
-        types.GenerateContentConfig(
-            temperature=0,
-            system_instruction=system_instruction or "Return ONLY valid JSON.",
+    if not use_search or allow_ungrounded_fallback:
+        configs.append(
+            types.GenerateContentConfig(
+                temperature=0,
+                system_instruction=system_instruction or "Return ONLY valid JSON.",
+            )
         )
-    )
 
     last_err: Exception | None = None
     for i, cfg in enumerate(configs):
@@ -122,7 +132,7 @@ def gemini_generate(prompt: str, *, system_instruction: str = "", use_search: bo
                 text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
                 if text:
                     return text
-                break  # empty response — try next config
+                break  # empty response — try next config (if any)
             except Exception as exc:
                 last_err = exc
                 if _is_transient(exc) and attempt < GEMINI_MAX_RETRIES - 1:
@@ -132,12 +142,21 @@ def gemini_generate(prompt: str, *, system_instruction: str = "", use_search: bo
                 elif i == 0 and len(configs) > 1:
                     logger.info("[UTILS] Error with Search grounding (%s) — trying without grounding", exc)
                     break
+                elif i == 0 and not allow_ungrounded_fallback:
+                    logger.warning(
+                        "[UTILS] Error with Search grounding (%s) and ungrounded fallback disabled - leaving empty",
+                        exc,
+                    )
+                    return ""
                 else:
                     raise
         if i == 0 and len(configs) > 1:
             logger.info("[UTILS] Empty/failed response with Search grounding — retrying without grounding")
+        elif i == 0 and not allow_ungrounded_fallback:
+            logger.info("[UTILS] Empty response with Search grounding and ungrounded fallback disabled - leaving empty")
+            return ""
 
-    if last_err:
+    if last_err and allow_ungrounded_fallback:
         raise last_err
     return ""
 
@@ -147,6 +166,7 @@ def gemini_generate_with_timeout(
     *,
     system_instruction: str = "",
     use_search: bool = True,
+    allow_ungrounded_fallback: bool = True,
     timeout_seconds: float,
     max_attempts: int = 2,
     log_context: str = "",
@@ -159,6 +179,10 @@ def gemini_generate_with_timeout(
     per-batch extraction, data_fetcher's enrichment fallback) so batches
     that legitimately need more time get it, without one hung batch
     blocking a whole run.
+
+    ``allow_ungrounded_fallback`` is forwarded to ``gemini_generate`` as-is
+    (see there): set it to ``False`` to leave an empty/failed grounded
+    response empty instead of retrying it without Search grounding.
 
     Raises ``TimeoutError`` if every attempt times out, or re-raises
     whatever ``gemini_generate`` itself raised.
@@ -174,7 +198,10 @@ def gemini_generate_with_timeout(
         def _call_gemini():
             try:
                 result_holder["text"] = gemini_generate(
-                    prompt, system_instruction=system_instruction, use_search=use_search,
+                    prompt,
+                    system_instruction=system_instruction,
+                    use_search=use_search,
+                    allow_ungrounded_fallback=allow_ungrounded_fallback,
                 )
             except Exception as exc:  # noqa: BLE001
                 error_holder["error"] = exc
