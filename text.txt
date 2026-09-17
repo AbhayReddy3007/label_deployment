@@ -1,89 +1,38 @@
-indication	ot_disease_name
-Hypertension	Hypertension
-Increased Epicardial Adipose Tissue	Increased blood pressure
-Left ventricular diastolic dysfunction	Left ventricular diastolic dysfunction
-Stroke	Stroke
-Atrial Fibrillation	atrial fibrillation
-Atrial Flutter	atrial flutter
-Atrial Tachycardia	atrial tachycardia
-Cardiovascular death	cardiovascular disorder
-Exercise Capacity	exercise
-Heart Failure with Preserved Ejection Fraction	heart failure
-Epicardial Adipose Tissue	heart lipoma
-"Heart Failure, Preserved Ejection Fraction"	heart lymphoma
-Left ventricular hypertrophy	left ventricular hypertrophy
-Left ventricular systolic dysfunction	left ventricular noncompaction
-Major Adverse Cardiovascular Events	major depressive disorder
-Myocardial infarction	myocardial infarction
-Myocardial Function	myocardial ischemia
-Physical Function	physical activity
-Vascular endothelial function	vascular disorder
-Submental Skin Laxity	Ludwig's angina
-Wrinkles	skin aging
-Skin Laxity	skin neoplasm
-Hirsutism	Hirsutism
-Impaired Endometrial Receptivity	Impaired glucose tolerance
-Infertility	Infertility
-Pediatric Obesity	Obesity
-Anovulation	anovulation
-Hyperandrogenism	hyperandrogenism
-Sexual Function	physiological sexual disorder
-Polycystic Ovary Syndrome	polycystic ovary syndrome
-Type 1 Diabetes	type 1 diabetes mellitus
-Pediatric Type 2 Diabetes (Ages 10-17)	type 2 diabetes mellitus
-Hepatic steatosis	Hepatic steatosis
-Non-alcoholic fatty liver disease	alcoholic fatty liver disease
-Liver Injury	drug-induced liver injury
-Fibrosis	fibrosis
-Hepatocyte Ballooning	hepatocyte growth factor  level
-Liver Dysfunction	liver disorder
-Nonalcoholic Steatohepatitis (NASH)	metabolic dysfunction-associated steatohepatitis
-Metabolic dysfunction-associated steatotic liver disease (MASLD)	metabolic dysfunction-associated steatotic liver disease
-Stage 4 Fibrosis	stage 5 chronic kidney disease
-Inflammation	inflammation
-Post-Acute Sequelae of SARS-CoV-2 Infection (PASC)	acute coronary syndrome
-Long COVID	long COVID-19
-Dyslipidemias	Dyslipidemias
-Ectopic fat	Ectopic posterior pituitary
-Prediabetes	Impaired glucose tolerance
-Pharmacokinetics	Pharmacokinetics
-Pharmacokinetics of Oral Contraceptives	Pharmacokinetics of Oral Contraceptives
-Bariatric Surgery	Wernicke-Korsakoff syndrome
-Lean mass preservation	appendicular lean mass
-Slow Burn	erythromelalgia
-Thermogenesis	level of coiled-coil domain-containing protein 9 in blood serum
-Lipid Profile	lipid amount
-Intramyocellular lipid	mitochondrial complex I deficiency
-Physical activity	physical activity
-Postprandial Glucose	postprandial hyperlipidemia
-Dyslipidemia	syndromic dyslipidemia
-Visceral Adipose Tissue (VAT)	visceral adipose tissue quantity
-Visceral Adiposity	visceral adiposity index
-Visceral fat	visceral heterotaxy
-Waist Circumference	waist circumference
-Skeletal muscle mass loss	Skeletal muscle hypertrophy
-Sarcopenia	sarcopenia
-Skeletal Muscle Mitochondrial Function	skeletal muscle disorder
-Renal Dysfunction	Arthrogryposis - renal dysfunction - cholestasis
-Chronic Kidney Disease	chronic kidney disease
-Chronic Kidney Disease (CKD) in Type 2 Diabetes	diabetic kidney disease
-Impaired Renal Function	impaired renal function disease
-Renal Impairment	renal carcinoma
-Alzheimer Disease	Alzheimer disease
-Anxiety	Anxiety
-Excessive Daytime Sleepiness	Excessive wrinkled skin
-Alcohol Consumption	alcohol consumption quality
-Alcohol Craving	alcohol dependence
-Alcohol Withdrawal	alcohol withdrawal
-Binge eating disorder	binge eating disorder
-Idiopathic intracranial hypertension	juvenile idiopathic arthritis
-Tobacco Use Disorder	nicotine dependence
-Alcohol Use Disorder	opioid use disorder
-Antipsychotic-induced weight gain	response to antipsychotic drug
-Opioid Craving	response to opioid
-Schizophrenia-spectrum disorders	schizophrenia
-Unresectable Solid Tumor	Unresectable Solid Tumor
-Advanced Solid Tumors	advanced heart failure
-Hypothalamic Obesity	hypothalamic neoplasm
-Postprandial Hyperinsulinemic Hypoglycemia	postprandial hyperlipidemia
-Obstructive sleep apnea	obstructive sleep apnea syndrome
+f0_	indication_type
+coronary atherosclerosis	None
+facial skin laxity	None
+facial aging	None
+polycystic ovary syndrome	Not Classified
+endometrial hyperplasia	None
+type 1 diabetes mellitus	Not Applicable
+polycystic ovary syndrome (pcos)	Not Classified
+type 1 diabetes	Not Applicable
+hyperandrogenism	None
+hirsutism	None
+chronic high bowel frequency	None
+fecal incontinence	None
+dumping syndrome	None
+compensated cirrhosis	None
+end-stage liver disease	None
+hiv infections	None
+antipsychotic-induced weight gain	None
+sarcopenia	Not Applicable
+sarcopenic obesity	Not Applicable
+end-stage renal disease	None
+renal impairment	Not Applicable
+alcohol use disorder	None
+cocaine use disorder	None
+cognitive impairment	None
+opioid use disorder	Not Classified
+stimulant use disorder	Not Applicable
+schizophrenia-spectrum disorders	Not Applicable
+idiopathic intracranial hypertension	None
+early-stage breast cancer	None
+breast cancer	None
+endometrial cancer	None
+advanced solid tumors	None
+cancer	None
+dry eye disease	None
+craniopharyngioma	None
+hypothalamic obesity	None
+prader-willi syndrome	Not Applicable
