@@ -30,6 +30,7 @@ from medical_potential.config import BQ_DATASET_ID, DRUG_NAME, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
 from ..bq_utils import LE_TABLE
+from ..indication_extractor.utils import extract_json as extract_json_utils, gemini_generate
 
 from .ot_utils import (
     OT_DISEASE_TABLE,
@@ -113,9 +114,23 @@ MEDICAL_SYNONYMS: dict[str, list[str]] = {
 # ==============================
 def normalize_indication(ind: str) -> str:
     """Canonical form so spelling variants map to the same key.
-    ``'Pre-diabetes'``, ``'Prediabetes'`` → ``'prediabetes'``."""
+
+    ``'Pre-diabetes'``, ``'Prediabetes'`` → ``'prediabetes'``.
+    ``'Non-alcoholic Fatty Liver Disease (NAFLD)'`` →
+    ``'nonalcoholic fatty liver disease'`` (same as ``'Non-alcoholic
+    fatty liver disease'``).
+
+    Strips: casing, intra-word hyphens, trailing parenthetical
+    abbreviations/annotations (e.g. ``(NAFLD)``, ``(NASH)``,
+    ``(MASLD)``, ``(CKD)``), and collapses whitespace.
+    """
     s = ind.strip()
+    # Strip parenthetical abbreviations/annotations anywhere in the string
+    # (e.g. "(NAFLD)", "(CKD)", "(PCOS)") so variants with and without them
+    # normalize to the same key.
+    s = re.sub(r"\s*\([^)]*\)", "", s).strip()
     s = re.sub(r"\s+", " ", s).lower()
+    # Strip intra-word hyphens (pre-diabetes → prediabetes)
     s = re.sub(r"(?<=\w)-(?=\w)", "", s)
     return re.sub(r"\s+", " ", s).strip()
 
@@ -632,6 +647,114 @@ def cluster_indications(indications: list[str], llm_ot_name_map: dict[str, str] 
 
 
 # ==============================
+# PATH C: GEMINI + GOOGLE SEARCH GROUNDING FALLBACK
+# ==============================
+_PATH_C_BATCH_SIZE = 10
+
+
+def _resolve_via_search_grounding_batch(indications: list[str]) -> dict[str, tuple[str | None, str | None]]:
+    """Uses Gemini with Google Search grounding to find the correct Open
+    Targets disease name and EFO/MONDO ID for indications that both Path A
+    (Gemini semantic match against the target's disease list) and Path B
+    (OT text search) failed to resolve.
+
+    This is the most expensive resolution path (one search-grounded Gemini
+    call per batch), but it has access to the full web — so it can find
+    the correct OT disease name even for indications the OT text search
+    API returns nothing useful for.
+
+    Returns ``{indication: (ot_disease_id, ot_disease_name)}`` for every
+    indication in the batch. Indications the search can't resolve get
+    ``(None, None)``.
+    """
+    if not indications:
+        return {}
+
+    ind_list = "\n".join(f"{i + 1}. {ind}" for i, ind in enumerate(indications))
+    prompt = f"""You are a biomedical terminology expert specializing in the Open Targets
+Platform (https://platform.opentargets.org/).
+
+Below is a list of clinical indications (disease/condition names). For each
+one, search the web to find its correct Open Targets disease entry — the
+standardized EFO or MONDO disease name and ID as used by the Open Targets
+Platform.
+
+Indications:
+{ind_list}
+
+For each indication, return:
+- ot_disease_name: the EXACT disease name as it appears on the Open Targets
+  Platform (e.g. "non-alcoholic steatohepatitis", "prediabetes syndrome",
+  "obesity"). This must be the canonical name from the EFO/MONDO ontology,
+  not a synonym or colloquial phrasing.
+- ot_disease_id: the EFO or MONDO ID (e.g. "EFO_0004268", "MONDO_0005148").
+  If you cannot find a confident match, use null for both fields.
+
+Return ONLY a JSON array — no markdown fences, no explanation:
+[
+  {{"indication": "<exact indication from input>",
+    "ot_disease_name": "<Open Targets disease name, or null>",
+    "ot_disease_id": "<EFO/MONDO ID, or null>"}}
+]
+"""
+    try:
+        text = gemini_generate(
+            prompt,
+            system_instruction=(
+                "You are a biomedical terminology expert. Search the Open Targets "
+                "Platform and EFO/MONDO ontologies to find exact disease mappings. "
+                "Return ONLY valid JSON."
+            ),
+            use_search=True,
+        )
+        parsed = extract_json_utils(text)
+        entries = parsed if isinstance(parsed, list) else parsed.get("results", []) if isinstance(parsed, dict) else []
+        result: dict[str, tuple[str | None, str | None]] = {}
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            ind = (e.get("indication") or "").strip()
+            did = (e.get("ot_disease_id") or "").strip() or None
+            name = (e.get("ot_disease_name") or "").strip() or None
+            if ind:
+                result[ind] = (did, name)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[IND_MAPPING] Path C search-grounded resolution failed for batch %s: %s", indications, exc)
+        return {}
+
+
+def resolve_via_search_grounding(unresolved: list[str]) -> dict[str, tuple[str | None, str | None]]:
+    """Batched Path C: resolves unmatched indications via Gemini + Google
+    Search grounding, ``_PATH_C_BATCH_SIZE`` at a time.
+
+    Called after Path A and Path B, for any indications they left with
+    ``(None, None)``. Returns ``{indication: (ot_disease_id, ot_disease_name)}``.
+    """
+    if not unresolved:
+        return {}
+
+    logger.info(
+        "[IND_MAPPING] Path C: Gemini + Google Search grounding for %d unresolved indication(s)",
+        len(unresolved),
+    )
+    batches = [
+        unresolved[i : i + _PATH_C_BATCH_SIZE]
+        for i in range(0, len(unresolved), _PATH_C_BATCH_SIZE)
+    ]
+    results: dict[str, tuple[str | None, str | None]] = {}
+    for batch in batches:
+        results.update(_resolve_via_search_grounding_batch(batch))
+
+    resolved_count = sum(1 for did, name in results.values() if did and name)
+    logger.info(
+        "[IND_MAPPING] Path C resolved %d/%d indication(s) via search grounding",
+        resolved_count, len(unresolved),
+    )
+    return results
+
+
+# ==============================
 # MATCH VALIDATION (rejects word-overlap false positives)
 # ==============================
 _VALIDATE_BATCH_SIZE = 20
@@ -778,15 +901,33 @@ def run_indication_mapping(
     # (e.g. "Pre-diabetes" showing up after "Prediabetes" was already
     # resolved in a prior run) reuses that mapping instead of being
     # treated as brand new and re-resolved independently.
+    #
+    # IMPORTANT: null mappings (ot_disease is None/empty — previously
+    # rejected or unresolved) are NOT treated as "already resolved".
+    # They are skipped here so the indication gets re-attempted with the
+    # current (possibly improved) resolution logic, rather than staying
+    # permanently frozen as unresolved from a prior run.
     existing_raw = fetch_existing_mappings(OT_DISEASE_TABLE, "indication")
     existing_norm: dict[str, dict] = {}
+    null_mapped_count = 0
     for raw_key, entry in existing_raw.items():
+        # Skip entries where ot_disease is null/empty — these are
+        # previously-failed resolutions that should be re-attempted.
+        if not (entry.get("ot_disease") or "").strip():
+            null_mapped_count += 1
+            continue
         nk = normalize_indication(raw_key)
         existing_norm.setdefault(nk, entry)  # first writer wins on collision
 
+    if null_mapped_count:
+        logger.info(
+            "[IND_MAPPING] Skipping %d null-mapped row(s) in %s — these will be re-attempted",
+            null_mapped_count, OT_DISEASE_TABLE,
+        )
+
     new_indications = [ind for ind in indications if normalize_indication(ind) not in existing_norm]
     logger.info(
-        "[IND_MAPPING] %d indication(s) total, %d already resolved, %d new to resolve",
+        "[IND_MAPPING] %d indication(s) total, %d already resolved (non-null), %d to resolve (new + previously null)",
         len(indications), len(indications) - len(new_indications), len(new_indications),
     )
 
@@ -880,7 +1021,21 @@ def run_indication_mapping(
                 ind, did, name = fut.result()
                 resolved_map[ind] = (did, name)
 
-    # Step 6: Validate every resolved mapping (Path A and Path B alike) —
+    # Step 5c: Path C — Gemini + Google Search grounding for anything
+    # Path A and Path B both failed to resolve. This is the most
+    # expensive path (one search-grounded Gemini call per batch), but
+    # it can find OT disease names the text search API misses entirely.
+    still_unresolved = [
+        ind for ind in canonical_reps
+        if not resolved_map.get(ind, (None, None))[0]
+    ]
+    if still_unresolved:
+        path_c_results = resolve_via_search_grounding(still_unresolved)
+        for ind, (did, name) in path_c_results.items():
+            if did and name:
+                resolved_map[ind] = (did, name)
+
+    # Step 6: Validate every resolved mapping (Path A, B, and C alike) —
     # rejects word-overlap false positives (e.g. "renal impairment" ->
     # "renal carcinoma") rather than storing a confidently wrong match.
     resolved_map = validate_resolved_mappings(resolved_map)
