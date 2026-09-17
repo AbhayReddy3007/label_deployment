@@ -1,82 +1,55 @@
-indication	ot_disease
-Advanced Solid Tumors	neoplasm
-Alcohol Use Disorder	
-Alcohol Use Disorder	alcohol dependence
-Antipsychotic-induced weight gain	
-Antipsychotic-induced weight gain	
-Breast Cancer	breast neoplasm
-Cancer	cancer
-Cardiovascular Diseases	cardiovascular disorder
-Cardiovascular disease	cardiovascular disorder
-Chronic High Bowel Frequency	
-Chronic High Bowel Frequency	Diarrhea
-Chronic Kidney Disease	chronic kidney disease
-Cocaine Use Disorder	cocaine use disorder
-Cognitive Impairment	Cognitive impairment
-Compensated Cirrhosis	cirrhosis of liver
-Coronary Atherosclerosis	coronary atherosclerosis
-Craniopharyngioma	craniopharyngioma
-Doença Hepática Gordurosa Não Alcoólica	metabolic dysfunction-associated steatotic liver disease
-Dry Eye Disease	dry eye syndrome
-Dumping Syndrome	dumping syndrome
-Early-Stage Breast Cancer	breast carcinoma
-End-Stage Renal Disease	
-End-Stage Renal Disease	
-End-stage liver disease	End Stage Liver Disease
-Endometrial Cancer	endometrial cancer
-Endometrial Hyperplasia	atypical endometrial hyperplasia
-Facial Aging	skin aging
-Facial Skin Laxity	
-Facial Skin Laxity	skin aging
-Fecal Incontinence	fecal incontinence
-HIV Infections	HIV-1 infection
-Heart Failure	heart failure
-Heart failure with preserved ejection fraction	heart failure
-Hirsutism	Hirsutism
-Hyperandrogenism	hyperandrogenism
-Hypothalamic Obesity	
-Hypothalamic Obesity	
-Idiopathic intracranial hypertension	
-Idiopathic intracranial hypertension	intracranial hypertension
-Inflammatory Bowel Disease	inflammatory bowel disease
-Liver cirrhosis	cirrhosis of liver
-Malignant Solid Neoplasm	malignant endocrine neoplasm
-Metabolic Dysfunction-Associated Steatohepatitis	metabolic dysfunction-associated steatohepatitis
-Metabolic Dysfunction-Associated Steatotic Liver Disease (MASLD)	metabolic dysfunction-associated steatotic liver disease
-Metabolic Dysfunction-associated Steatohepatitis (MASH)	metabolic dysfunction-associated steatohepatitis
-Metabolic Syndrome	metabolic syndrome
-Metabolic dysfunction-associated steatotic liver disease	metabolic dysfunction-associated steatotic liver disease
-Methamphetamine Use Disorder	methamphetamine dependence
-Myocardial infarction	myocardial infarction
-Non-Alcoholic Fatty Liver Disease	
-Non-Alcoholic Fatty Liver Disease (NAFLD)	non-alcoholic fatty liver
-Non-Alcoholic Steatohepatitis (NASH)	
-Non-alcoholic Steatohepatitis	
-Non-alcoholic Steatohepatitis	
-Non-alcoholic steatohepatitis (NASH)	
-Nonalcoholic Fatty Liver Disease	
-Nonalcoholic Fatty Liver Disease (NAFLD)	non-alcoholic fatty liver
-Nonalcoholic Steatohepatitis	
-Nonalcoholic Steatohepatitis	
-Nonalcoholic Steatohepatitis (NASH)	
-Nonalcoholic Steatohepatitis (NASH)	
-Obstructive Sleep Apnoea	
-Obstructive sleep apnea	obstructive sleep apnea syndrome
-Opioid Use Disorder	opioid use disorder
-Polycystic Ovary Syndrome	polycystic ovary syndrome
-Polycystic Ovary Syndrome (PCOS)	polycystic ovary syndrome
-Prader-Willi Syndrome	Prader-Willi syndrome
-Pre-diabetes	
-Pre-diabetes	Glucose intolerance
-Prediabetes	
-Prediabetes	Glucose intolerance
-Prediabetic State	prediabetes syndrome
-Renal Impairment	Renal insufficiency
-Sarcopenia	sarcopenia
-Sarcopenic Obesity	
-Sarcopenic Obesity	sarcopenic obesity
-Schizophrenia-spectrum disorders	schizophrenia
-Stimulant Use Disorder	cocaine use disorder
-Stroke	Stroke
-Type 1 Diabetes	type 1 diabetes mellitus
-Type 1 Diabetes Mellitus	type 1 diabetes mellitus
+indication	ot_disease_name	association_score
+Hypertension	Hypertension	0.48322106652420371
+Stroke	Stroke	0.27231001597752091
+Cardiovascular Diseases	cardiovascular disorder	0.37912793454771337
+Coronary Atherosclerosis	coronary atherosclerosis	0.32781980369931391
+Heart Failure with Preserved Ejection Fraction	heart failure	0.2713709506655122
+Myocardial Infarction	myocardial infarction	0.38608734884921031
+Dyslipidemia	syndromic dyslipidemia	
+Facial Skin Laxity	facial skin laxity	
+Facial Aging	skin aging	0.0051535857514366755
+Hirsutism	Hirsutism	0.0073915970936940375
+Pediatric Obesity	Obesity	0.63033339109535447
+Hyperandrogenism	hyperandrogenism	0.076043842410243284
+Hypothalamic Obesity	hypothalamic obesity	
+Polycystic Ovary Syndrome	polycystic ovary syndrome	0.41996570164509039
+Type 1 Diabetes Mellitus	type 1 diabetes mellitus	0.52432975525301062
+Chronic High Bowel Frequency	chronic high bowel frequency	
+Dumping Syndrome	dumping syndrome	0.028043066276799481
+Fecal Incontinence	fecal incontinence	0.00406537840153172
+Inflammatory Bowel Disease	inflammatory bowel disease	0.11460589731687622
+End-stage liver disease	End Stage Liver Disease	
+Liver cirrhosis	cirrhosis of liver	0.37240176266648917
+Non-alcoholic steatohepatitis (NASH)	metabolic dysfunction-associated steatohepatitis	0.413960709027386
+Metabolic Dysfunction-associated Steatotic Liver Disease (MASLD)	metabolic dysfunction-associated steatotic liver disease	0.534462206797635
+Non-alcoholic fatty liver disease	non-alcoholic fatty liver	0.011644091242880626
+HIV Infections	HIV-1 infection	
+Antipsychotic-induced weight gain	antipsychoticinduced weight gain	
+Hypothalamic Obesity	hypothalamic obesity	
+Metabolic Syndrome	metabolic syndrome	0.23142737522967127
+Prediabetes	prediabetes	
+Prediabetic State	prediabetes syndrome	0.385140881769619
+Sarcopenic Obesity	sarcopenic obesity	
+Type 1 Diabetes Mellitus	type 1 diabetes mellitus	0.52432975525301062
+Sarcopenia	sarcopenia	0.089171607441347472
+Renal Impairment	Renal insufficiency	0.014688361685153684
+Chronic Kidney Disease	chronic kidney disease	0.41589279141772173
+End-Stage Renal Disease	endstage renal disease	
+Cognitive Impairment	Cognitive impairment	0.087200872811659932
+Alcohol Use Disorder	alcohol use disorder	
+Cocaine Use Disorder	cocaine use disorder	0.1058225663828409
+Idiopathic intracranial hypertension	idiopathic intracranial hypertension	
+Methamphetamine Use Disorder	methamphetamine dependence	
+Opioid Use Disorder	opioid use disorder	0.10919876357584864
+Schizophrenia-spectrum disorders	schizophrenia	0.28480422959908358
+Advanced Solid Tumors	advanced solid tumors	
+Endometrial Hyperplasia	atypical endometrial hyperplasia	0.203268920076586
+Early-Stage Breast Cancer	breast carcinoma	0.34859649757451672
+Breast Cancer	breast neoplasm	0.0073710648795448858
+Cancer	cancer	0.11513202813725902
+Endometrial Cancer	endometrial cancer	0.12875707999966973
+Malignant Solid Neoplasm	malignant endocrine neoplasm	0.0044349582562164215
+Dry Eye Disease	dry eye syndrome	
+Prader-Willi Syndrome	Prader-Willi syndrome	0.27074486247768231
+Craniopharyngioma	craniopharyngioma	0.0085157358183600047
+Obstructive Sleep Apnea	obstructive sleep apnea syndrome	0.40548049407918313
