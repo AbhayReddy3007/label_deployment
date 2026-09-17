@@ -25,7 +25,9 @@ import requests
 
 from medical_potential.config import DRUG_NAME
 
-from .utils import SECONDARY_INDICATION_CRITERIA, extract_json, gemini_generate
+from .utils import PROCESS_INDICATIONS, SECONDARY_INDICATION_CRITERIA, extract_json, gemini_generate
+
+from ..bq_utils import fetch_existing_indication_rows
 
 logger = logging.getLogger(__name__)
 
@@ -216,10 +218,13 @@ The drug "{drug_name}" has the following FDA-approved indications:
 {diseases_list}
 
 For each indication, determine:
-1. indication_type:
+1. indication_type — you MUST choose exactly one of these two values:
     "Primary"   - one of the drug's main approved or originally intended indications.
     "Secondary" - a label expansion beyond the primary use.
                   {SECONDARY_INDICATION_CRITERIA}
+   Do NOT use any other value. If unsure, default to "Primary" (since
+   these are FDA-approved indications). Never use "None", "Not Applicable",
+   "Not Classified", null, or any other label.
 2. therapy_area: Metabolic, Cardiovascular, Oncology, Neuroscience, Immunology,
    Respiratory, Nephrology, Hepatology, Ophthalmology, Musculoskeletal,
    Gastroenterology, Infectious Disease, Dermatology, Hematology, Endocrinology,
@@ -250,6 +255,58 @@ Return ONLY a JSON array:
 
 
 # ==============================
+# PROCESS_INDICATIONS MODE: RECLASSIFY WITHOUT RE-FETCHING
+# ==============================
+def _reprocess_existing_indications(drug_name: str) -> list[dict]:
+    """Re-classifies FDA-sourced indications already sitting in
+    ``LE_TABLE`` for this drug instead of re-querying the openFDA APIs
+    and re-extracting label text via Gemini. One classify call over the
+    unique disease names, versus a brand lookup + label fetch +
+    extraction pass per brand - much cheaper, at the cost of not
+    discovering any brands/indications not already stored.
+    """
+    logger.info(
+        "[FDA_FETCHER] PROCESS_INDICATIONS=True — reprocessing existing FDA indications for '%s' "
+        "instead of re-fetching from openFDA",
+        drug_name,
+    )
+    existing_rows = fetch_existing_indication_rows(drug_name, source="fda")
+    if not existing_rows:
+        logger.warning(
+            "[FDA_FETCHER] No existing FDA-sourced rows found in LE_TABLE for '%s' to reprocess",
+            drug_name,
+        )
+        return []
+
+    disease_names = sorted({
+        (r.get("indication") or "").strip()
+        for r in existing_rows
+        if (r.get("indication") or "").strip()
+    })
+    classifications = _classify_indications(drug_name, disease_names)
+    classified_map = {
+        (c.get("indication") or "").strip().lower(): c
+        for c in classifications
+        if isinstance(c, dict)
+    }
+
+    _VALID_TYPES = {"primary", "secondary"}
+    for row in existing_rows:
+        classification = classified_map.get((row.get("indication") or "").strip().lower(), {})
+        raw_type = (classification.get("indication_type") or "").strip().lower()
+        if raw_type in _VALID_TYPES:
+            row["indication_type"] = classification["indication_type"]
+        row["therapy_area"] = classification.get("therapy_area", row.get("therapy_area", "Other"))
+        row["llm_ot_name"] = classification.get("ot_disease_name") or row.get("llm_ot_name")
+
+    logger.info(
+        "[FDA_FETCHER] Reprocessed %d existing row(s) for '%s'",
+        len(existing_rows), drug_name,
+    )
+    return existing_rows
+
+
+# ==============================
 # ENTRY POINT
 # ==============================
 def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
@@ -258,11 +315,19 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
     Returns a flat list of row dicts, one per unique disease/condition,
     with ``phase = "Approved"``, ``data_source = "Trials"``, and
     ``trial_id = "<indication> + fda"``.
+
+    If ``PROCESS_INDICATIONS`` (in ``utils.py``) is ``True``, skips
+    finding FDA brands and re-fetching/re-extracting label text entirely,
+    and instead re-classifies the FDA-sourced indications already sitting
+    in ``LE_TABLE`` for this drug - see ``_reprocess_existing_indications``.
     """
     if not isinstance(drug_name, str) or not drug_name.strip():
         raise TypeError(
             f"fda_fetcher.analyse() accepts exactly one drug name (str), got: {drug_name!r}"
         )
+
+    if PROCESS_INDICATIONS:
+        return _reprocess_existing_indications(drug_name)
 
     logger.info("[FDA_FETCHER] Starting FDA indication fetch for '%s'", drug_name)
 
@@ -308,14 +373,17 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
     }
 
     # Step 5: Build output rows
+    _VALID_TYPES = {"primary", "secondary"}
     flat_rows: list[dict] = []
     for disease in disease_names:
         classification = classified_map.get(disease.lower(), {})
+        raw_type = (classification.get("indication_type") or "").strip().lower()
         flat_rows.append({
             "drug_name": drug_name,
             "indication": disease,
             "llm_ot_name": classification.get("ot_disease_name"),
-            "indication_type": classification.get("indication_type", "Primary"),
+            "indication_type": classification.get("indication_type", "Primary")
+                if raw_type in _VALID_TYPES else "Primary",
             "therapy_area": classification.get("therapy_area", "Other"),
             "rationale": "FDA-approved indication",
             "trial_title": None,
