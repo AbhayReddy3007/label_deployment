@@ -590,25 +590,32 @@ def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, drug_details_table: 
         )
 
         # Step 2.5: DATA_FETCHER_TABLE cache - reuse anything already fetched
-        # on a previous run instead of looking it up or searching again.
+        # on a previous run. Trials found here are DONE — they will NOT be
+        # looked up again in CLINICAL_TRIALS_SERIOUS_SAFETY_DATA or Gemini,
+        # even if some of the cached fields are still null (the previous run
+        # already tried all sources for them and this is its best result).
         cached_enrichment = fetch_cached_enrichment(trials_needing_fill)
+        cached_trial_ids: set[str] = set()
         for r in trial_rows:
             norm_id = _normalize_trial_id(r.get("trial_id"))
             entry = cached_enrichment.get(norm_id)
             if not entry:
                 continue
+            cached_trial_ids.add(norm_id)
             for field in TRIAL_ENRICHMENT_FIELDS:
                 if _is_missing(r.get(field)) and not _is_missing(entry.get(field)):
                     r[field] = entry[field]
 
         newly_fetched: dict[str, dict] = {}
 
-        # Step 3: CLINICAL_TRIALS_SERIOUS_SAFETY_DATA - only for trials not
-        # already resolved by the cache above.
+        # Step 3: CLINICAL_TRIALS_SERIOUS_SAFETY_DATA - only for trials NOT
+        # already in the cache (cached trials are final, even if partial).
         still_needs_bq = sorted({
             _normalize_trial_id(r["trial_id"])
             for r in trial_rows
-            if r.get("trial_id") and _needs_fill(r)
+            if r.get("trial_id")
+               and _needs_fill(r)
+               and _normalize_trial_id(r["trial_id"]) not in cached_trial_ids
         })
         if still_needs_bq:
             bq_enrichment = fetch_serious_safety_data(still_needs_bq)
@@ -623,11 +630,14 @@ def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, drug_details_table: 
                 if norm_id in still_needs_bq:
                     newly_fetched.setdefault(norm_id, {}).update(entry)
 
-        # Step 4: Gemini fallback for whatever's still missing
+        # Step 4: Gemini fallback for whatever's still missing (excluding
+        # cached trials — those are final).
         still_missing = sorted({
             _normalize_trial_id(r["trial_id"])
             for r in trial_rows
-            if r.get("trial_id") and _needs_fill(r)
+            if r.get("trial_id")
+               and _needs_fill(r)
+               and _normalize_trial_id(r["trial_id"]) not in cached_trial_ids
         })
         if still_missing:
             gemini_enrichment = gemini_fill_missing(still_missing)
@@ -654,5 +664,22 @@ def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, drug_details_table: 
         r.setdefault("drug_arm_size_n", None)
 
     all_rows = trial_rows + non_trial_rows
+
+    # Sanitize: null out any remaining string sentinels (e.g. "N/A") in
+    # drug_arm_size_n so downstream code and BigQuery FLOAT64 columns
+    # receive either a real number or None, never a non-numeric string.
+    for r in all_rows:
+        val = r.get("drug_arm_size_n")
+        if val is not None:
+            if isinstance(val, str):
+                stripped = val.strip().lower()
+                if stripped in ("", "nan", "none", "n/a", "na", "null", "-"):
+                    r["drug_arm_size_n"] = None
+                else:
+                    try:
+                        r["drug_arm_size_n"] = float(val)
+                    except (ValueError, TypeError):
+                        r["drug_arm_size_n"] = None
+
     logger.info("[DATA_FETCHER] Completed. %d row(s) ready for scoring for '%s'", len(all_rows), drug_name)
     return all_rows
