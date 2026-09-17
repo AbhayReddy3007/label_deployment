@@ -294,3 +294,120 @@ The following must NOT be considered secondary indications:
 * Early discovery or preclinical signals without human data
 * Any indication lacking traceable, verifiable evidence of results
 """
+
+
+# ==============================
+# SCORABLE-INDICATION FILTER (shared safety net)
+# ==============================
+# Used by the main orchestrator, after merging trial_analyser/fda_fetcher/
+# web_analyser output, to drop rows whose "indication" is actually a trial
+# endpoint, biomarker, PK parameter, or procedure rather than a genuine
+# disease/condition. These can never become an approved label indication,
+# so they shouldn't be scored as label-expansion opportunities. This is a
+# safety net for cases the extraction prompts themselves didn't already
+# exclude.
+SCORABLE_BATCH_SIZE = 20
+
+
+def _classify_scorable_batch(indications: list[str]) -> dict[str, bool]:
+    """One Gemini call: classifies each indication as scorable (a genuine
+    disease/condition) or not (an endpoint/biomarker/PK parameter/
+    procedure). Returns ``{indication_lower: is_scorable}``."""
+    if not indications:
+        return {}
+
+    ind_list = "\n".join(f"{i + 1}. {ind}" for i, ind in enumerate(indications))
+    prompt = f"""You are a pharmaceutical analyst.
+
+Below is a numbered list of strings extracted from clinical trial and FDA
+label data. For EACH one, decide whether it is a disease or medical
+condition that could plausibly appear as an FDA-approved drug indication
+(scorable), or whether it is something else that should NOT be scored as
+an indication - a trial endpoint or outcome measure, a biomarker or lab
+value, a pharmacokinetic parameter, a physiological measurement, or a
+procedure/intervention (not scorable).
+
+Examples of NOT scorable: "Exercise Capacity", "Waist Circumference",
+"Postprandial Glucose", "Pharmacokinetics", "Lipid Profile",
+"Hepatocyte Ballooning", "Bariatric Surgery".
+Examples of scorable: "Type 2 Diabetes", "Obesity", "Heart Failure".
+
+Items:
+{ind_list}
+
+Return ONLY a JSON array, one object per item, in the same order:
+[
+  {{"item": "<exact item text>", "scorable": true or false}}
+]
+"""
+    try:
+        text = gemini_generate(
+            prompt,
+            system_instruction=(
+                "Classify each item as a scorable disease/condition or not. "
+                "Return ONLY valid JSON."
+            ),
+            use_search=False,
+        )
+        parsed = extract_json(text)
+        entries = parsed if isinstance(parsed, list) else parsed.get("items", []) if isinstance(parsed, dict) else []
+        result: dict[str, bool] = {}
+        for e in entries:
+            if not isinstance(e, dict):
+                continue
+            item = (e.get("item") or "").strip().lower()
+            if item:
+                result[item] = bool(e.get("scorable", True))
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[UTILS] Scorable classification failed for batch %s: %s", indications, exc)
+        # Fail open: on error, keep everything rather than silently
+        # dropping potentially-valid indications.
+        return {ind.lower(): True for ind in indications}
+
+
+def filter_scorable_indications(rows: list[dict]) -> list[dict]:
+    """Drops rows whose ``indication`` is a trial endpoint, biomarker,
+    pharmacokinetic parameter, or procedure rather than an actual
+    disease/condition.
+
+    Runs one batched Gemini call per ``SCORABLE_BATCH_SIZE`` unique
+    indications (not per row) to keep cost down, then filters ``rows``
+    using the result. On any classification failure, the affected
+    indications are kept (fail open) rather than silently dropped.
+    """
+    if not rows:
+        return rows
+
+    unique_indications = sorted({
+        (r.get("indication") or "").strip()
+        for r in rows
+        if (r.get("indication") or "").strip()
+    })
+    if not unique_indications:
+        return rows
+
+    batches = [
+        unique_indications[i : i + SCORABLE_BATCH_SIZE]
+        for i in range(0, len(unique_indications), SCORABLE_BATCH_SIZE)
+    ]
+
+    scorable_map: dict[str, bool] = {}
+    for batch in batches:
+        scorable_map.update(_classify_scorable_batch(batch))
+
+    kept: list[dict] = []
+    dropped: list[str] = []
+    for r in rows:
+        ind = (r.get("indication") or "").strip().lower()
+        if not ind or scorable_map.get(ind, True):
+            kept.append(r)
+        else:
+            dropped.append(r.get("indication"))
+
+    if dropped:
+        logger.info(
+            "[UTILS] Filtered out %d row(s) with non-scorable indication(s): %s",
+            len(dropped), sorted(set(dropped)),
+        )
+    return kept
