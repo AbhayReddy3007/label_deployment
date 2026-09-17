@@ -258,9 +258,16 @@ def _fallback_search_terms(ind: str) -> list[str]:
 # ==============================
 # OT TEXT SEARCH FALLBACK (Path B)
 # ==============================
-def _resolve_via_ot_search(ind: str) -> tuple[str | None, str | None]:
-    """Resolve one indication via progressive OT text search."""
-    search_terms = [ind] + _fallback_search_terms(ind)
+def _resolve_via_ot_search(ind: str, llm_ot_name: str | None = None) -> tuple[str | None, str | None]:
+    """Resolve one indication via progressive OT text search.
+
+    ``llm_ot_name``, when available (the LLM's own guess of this
+    indication's standardized Open Targets name, captured at extraction
+    time), is searched FIRST - it's usually a more accurate query than
+    the raw extracted indication text, since it's already phrased in
+    standard disease terminology.
+    """
+    search_terms = ([llm_ot_name] if llm_ot_name else []) + [ind] + _fallback_search_terms(ind)
     candidates: list[tuple[str, str, str]] = []
 
     for term in search_terms:
@@ -470,14 +477,21 @@ def _match_all_against_ot_list(
 # ==============================
 # FETCH INDICATIONS FROM LE_TABLE
 # ==============================
-def fetch_indications_for_drug(drug_name: str, secondary_only: bool = False) -> list[str]:
-    """Fetches distinct indications for a drug from the LE_TABLE.
+def fetch_indications_for_drug(drug_name: str, secondary_only: bool = False) -> list[dict]:
+    """Fetches distinct indications for a drug from the LE_TABLE, along with
+    each indication's LLM-suggested Open Targets disease name (``llm_ot_name``,
+    populated at extraction time by trial_analyser/fda_fetcher/web_analyser),
+    when available - used as a resolution hint by Path B search and by
+    semantic clustering.
 
     Args:
         drug_name: the drug/molecule name.
         secondary_only: if ``True``, only fetches indications where
             ``indication_type = 'Secondary'``. Used for OT mapping and
             scoring, which should only run on label-expansion candidates.
+
+    Returns:
+        List of dicts: ``{"indication": str, "llm_ot_name": str | None}``.
     """
     bq_client = get_bq_client()
     table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LE_TABLE}"
@@ -485,13 +499,14 @@ def fetch_indications_for_drug(drug_name: str, secondary_only: bool = False) -> 
     secondary_filter = "AND LOWER(indication_type) = 'secondary'" if secondary_only else ""
 
     query = f"""
-        SELECT DISTINCT indication
+        SELECT indication, MAX(llm_ot_name) AS llm_ot_name
         FROM `{table_id}`
         WHERE drug_name = @drug_name
           AND indication IS NOT NULL
           AND indication != ''
           AND indication != 'Unknown (extraction failed)'
           {secondary_filter}
+        GROUP BY indication
     """
     job_config = bigquery.QueryJobConfig(
         query_parameters=[
@@ -499,11 +514,214 @@ def fetch_indications_for_drug(drug_name: str, secondary_only: bool = False) -> 
         ]
     )
     results = bq_client.query(query, job_config=job_config).result()
-    indications = [row["indication"].strip() for row in results if row["indication"]]
+    indications = [
+        {
+            "indication": row["indication"].strip(),
+            "llm_ot_name": (row.get("llm_ot_name") or "").strip() or None,
+        }
+        for row in results
+        if row["indication"]
+    ]
 
     label = "Secondary" if secondary_only else "all"
     logger.info("[IND_MAPPING] Fetched %d %s indication(s) for '%s' from %s", len(indications), label, drug_name, LE_TABLE)
     return indications
+
+
+# ==============================
+# SEMANTIC CLUSTERING (groups synonyms that don't share spelling)
+# ==============================
+_CLUSTER_CHUNK_SIZE = 60
+
+
+def _cluster_chunk(indications: list[str], llm_ot_name_map: dict[str, str]) -> dict[str, str]:
+    """One Gemini call: groups a chunk of indications describing the same
+    underlying clinical concept (synonyms, abbreviations, anatomical
+    qualifiers, old vs. new nomenclature - e.g. NAFLD and MASLD are the
+    same disease) and returns ``{raw_indication: canonical_indication}``.
+    Every input indication is guaranteed a mapping, even if that maps to
+    itself (unclustered)."""
+    if not indications:
+        return {}
+
+    lines = []
+    for i, ind in enumerate(indications):
+        hint = llm_ot_name_map.get(ind)
+        lines.append(f"{i + 1}. {ind}" + (f" (suggested OT disease: {hint})" if hint else ""))
+    ind_block = "\n".join(lines)
+
+    prompt = f"""You are a biomedical terminology expert.
+
+Below is a list of clinical indications extracted from trials and FDA
+labels for one drug. Some entries describe the SAME underlying disease
+or condition using different wording - synonyms, abbreviations,
+anatomical/severity qualifiers, or old vs. current nomenclature (for
+example, NAFLD and MASLD are the same disease under different names).
+Where given, a "suggested OT disease" hint shows another model's guess
+at that indication's standardized Open Targets name - use it as a
+signal, but rely on your own clinical judgment.
+
+Group these into clusters where each cluster represents ONE underlying
+clinical concept. For each cluster, pick ONE canonical name (prefer the
+most standard/current medical term). Do NOT merge indications that are
+only superficially similar but refer to different conditions or
+different severities that are tracked separately.
+
+Indications:
+{ind_block}
+
+Return ONLY a JSON array - no markdown fences, no explanation:
+[
+  {{"canonical": "<canonical name>", "members": ["<indication 1>", "<indication 2>", ...]}}
+]
+Every indication listed above must appear in exactly one cluster's
+"members" list, even if its cluster contains only itself.
+"""
+    try:
+        text = gemini_call(prompt)
+        clusters = parse_json_response(text)
+        seen_inputs = {ind.strip().lower(): ind for ind in indications}
+        mapping: dict[str, str] = {}
+        for c in clusters if isinstance(clusters, list) else []:
+            if not isinstance(c, dict):
+                continue
+            canonical = (c.get("canonical") or "").strip()
+            if not canonical:
+                continue
+            for member in c.get("members", []) if isinstance(c.get("members"), list) else []:
+                orig = seen_inputs.get((member or "").strip().lower())
+                if orig:
+                    mapping[orig] = canonical
+        for ind in indications:
+            mapping.setdefault(ind, ind)  # unclustered -> maps to itself
+        return mapping
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[IND_MAPPING] Clustering failed for chunk %s: %s - treating each as its own cluster", indications, exc)
+        return {ind: ind for ind in indications}
+
+
+def cluster_indications(indications: list[str], llm_ot_name_map: dict[str, str] | None = None) -> dict[str, str]:
+    """Groups indications describing the same clinical concept so they
+    resolve to (and score as) a single TA-I instead of several duplicates.
+
+    Chunks large lists (``_CLUSTER_CHUNK_SIZE`` at a time) since clustering
+    quality degrades with an overlong prompt; synonyms that happen to fall
+    in different chunks won't be merged, which is an acceptable trade-off
+    at typical per-drug indication counts.
+
+    Returns ``{raw_indication: canonical_indication}`` - every input maps
+    to something, even if only to itself.
+    """
+    if not indications:
+        return {}
+    llm_ot_name_map = llm_ot_name_map or {}
+
+    chunks = [
+        indications[i : i + _CLUSTER_CHUNK_SIZE]
+        for i in range(0, len(indications), _CLUSTER_CHUNK_SIZE)
+    ]
+    logger.info(
+        "[IND_MAPPING] Clustering %d indication(s) in %d chunk(s) of up to %d",
+        len(indications), len(chunks), _CLUSTER_CHUNK_SIZE,
+    )
+
+    mapping: dict[str, str] = {}
+    for chunk in chunks:
+        mapping.update(_cluster_chunk(chunk, llm_ot_name_map))
+    return mapping
+
+
+# ==============================
+# MATCH VALIDATION (rejects word-overlap false positives)
+# ==============================
+_VALIDATE_BATCH_SIZE = 20
+
+
+def _validate_match_batch(pairs: list[tuple[str, str]]) -> dict[str, bool]:
+    """One Gemini call: for each (indication, proposed OT disease name)
+    pair, decides whether the proposed disease is a clinically valid
+    match - not just a word-overlap false positive (e.g. "renal
+    impairment" matched to "renal carcinoma" shares a word but is NOT a
+    valid match; they must refer to the same or a closely related
+    disease). Returns ``{indication_lower: is_valid}``."""
+    if not pairs:
+        return {}
+
+    lines = "\n".join(
+        f'{i + 1}. Indication: "{ind}" | Proposed match: "{name}"'
+        for i, (ind, name) in enumerate(pairs)
+    )
+    prompt = f"""You are a biomedical terminology expert reviewing automated
+disease-name matches for quality control.
+
+For each pair below, decide whether the "Proposed match" is a clinically
+valid match for the "Indication" - i.e. they refer to the same disease,
+or a very closely related form of it (e.g. a synonym, a renamed term, or
+a specific subtype). A match based only on shared words (e.g. "renal
+impairment" vs. "renal carcinoma", "ectopic fat" vs. "ectopic posterior
+pituitary") is NOT valid unless the underlying condition is genuinely
+the same or closely related.
+
+Pairs:
+{lines}
+
+Return ONLY a JSON array - no markdown fences, no explanation:
+[
+  {{"indication": "<exact indication text>", "valid": true or false}}
+]
+"""
+    try:
+        text = gemini_call(prompt)
+        parsed = parse_json_response(text)
+        result: dict[str, bool] = {}
+        for e in parsed if isinstance(parsed, list) else []:
+            if not isinstance(e, dict):
+                continue
+            ind = (e.get("indication") or "").strip().lower()
+            if ind:
+                result[ind] = bool(e.get("valid", True))
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[IND_MAPPING] Match validation failed for batch %s: %s", pairs, exc)
+        # Fail open: on error, keep the match rather than silently
+        # discarding a possibly-correct resolution.
+        return {ind.lower(): True for ind, _ in pairs}
+
+
+def validate_resolved_mappings(
+    resolved: dict[str, tuple[str | None, str | None]],
+) -> dict[str, tuple[str | None, str | None]]:
+    """Re-checks every resolved (Path A or Path B) mapping with a
+    dedicated Gemini QC pass, nulling out any match that isn't a genuine
+    clinical match (rather than a word-overlap false positive). A null
+    mapping is preferable to a confidently wrong one - it simply means
+    that indication won't get an association_score."""
+    to_check = [(ind, did, name) for ind, (did, name) in resolved.items() if did and name]
+    if not to_check:
+        return resolved
+
+    logger.info("[IND_MAPPING] Validating %d resolved mapping(s)", len(to_check))
+    validated = dict(resolved)
+    batches = [
+        to_check[i : i + _VALIDATE_BATCH_SIZE]
+        for i in range(0, len(to_check), _VALIDATE_BATCH_SIZE)
+    ]
+    rejected = 0
+    for batch in batches:
+        pairs = [(ind, name) for ind, _did, name in batch]
+        results = _validate_match_batch(pairs)
+        for ind, did, name in batch:
+            if not results.get(ind.lower(), True):
+                logger.warning(
+                    "[IND_MAPPING] Rejected low-confidence match: '%s' -> '%s' (%s)",
+                    ind, name, did,
+                )
+                validated[ind] = (None, None)
+                rejected += 1
+
+    if rejected:
+        logger.info("[IND_MAPPING] Validation rejected %d/%d resolved mapping(s)", rejected, len(to_check))
+    return validated
 
 
 # ==============================
@@ -516,13 +734,23 @@ def run_indication_mapping(
 ) -> list[dict]:
     """Full indication mapping pipeline for one drug.
 
-    1. Fetch indications from ``LE_TABLE``.
-    2. Check which indications are already resolved in ``OT_DISEASE_TABLE``.
-    3. Normalize and deduplicate new indications.
-    4. Resolve via Path A (Gemini + OT disease list) if targets given,
-       then Path B (OT text search) for any remaining.
-    5. Push new mappings to ``OT_DISEASE_TABLE``.
-    6. Return all resolved mappings (existing + new).
+    1. Fetch indications (+ their LLM-suggested OT name hint) from ``LE_TABLE``.
+    2. Check which indications are already resolved in ``OT_DISEASE_TABLE``,
+       matching on normalized text so spelling/hyphenation variants of an
+       already-resolved indication (e.g. "Prediabetes" vs. "Pre-diabetes")
+       reuse the existing mapping instead of being re-resolved from scratch.
+    3. Normalize and deduplicate new indications by spelling.
+    4. Cluster the normalized representatives semantically (Gemini), so
+       synonyms that don't share spelling (e.g. NAFLD vs. MASLD) resolve
+       to one canonical indication instead of several duplicates.
+    5. Resolve each canonical cluster via Path A (Gemini + OT disease list)
+       if targets given, then Path B (OT text search, seeded with the
+       LLM-suggested OT name when available) for any remaining.
+    6. Validate every resolved mapping with a dedicated Gemini QC pass,
+       nulling out matches that are word-overlap false positives rather
+       than genuine clinical matches.
+    7. Push new mappings to ``OT_DISEASE_TABLE``.
+    8. Return all resolved mappings (existing + new).
 
     Args:
         drug_name: the drug/molecule name.
@@ -534,32 +762,49 @@ def run_indication_mapping(
     """
     logger.info("[IND_MAPPING] Starting indication mapping for '%s'", drug_name)
 
-    # Step 1: Fetch indications
-    indications = fetch_indications_for_drug(drug_name, secondary_only=secondary_only)
-    if not indications:
+    # Step 1: Fetch indications + their LLM-suggested OT name hints
+    fetched = fetch_indications_for_drug(drug_name, secondary_only=secondary_only)
+    if not fetched:
         logger.warning("[IND_MAPPING] No indications found for '%s' — nothing to resolve", drug_name)
         return []
 
-    # Step 2: Check existing mappings
-    existing = fetch_existing_mappings(OT_DISEASE_TABLE, "indication")
-    new_indications = [ind for ind in indications if ind.strip().lower() not in existing]
+    indications = [f["indication"] for f in fetched]
+    llm_ot_name_map: dict[str, str] = {
+        f["indication"]: f["llm_ot_name"] for f in fetched if f.get("llm_ot_name")
+    }
+
+    # Step 2: Check existing mappings — keyed by NORMALIZED text so a
+    # spelling/hyphenation variant of an already-resolved indication
+    # (e.g. "Pre-diabetes" showing up after "Prediabetes" was already
+    # resolved in a prior run) reuses that mapping instead of being
+    # treated as brand new and re-resolved independently.
+    existing_raw = fetch_existing_mappings(OT_DISEASE_TABLE, "indication")
+    existing_norm: dict[str, dict] = {}
+    for raw_key, entry in existing_raw.items():
+        nk = normalize_indication(raw_key)
+        existing_norm.setdefault(nk, entry)  # first writer wins on collision
+
+    new_indications = [ind for ind in indications if normalize_indication(ind) not in existing_norm]
     logger.info(
         "[IND_MAPPING] %d indication(s) total, %d already resolved, %d new to resolve",
         len(indications), len(indications) - len(new_indications), len(new_indications),
     )
+
+    def _existing_lookup(ind: str) -> dict:
+        return existing_norm.get(normalize_indication(ind), {})
 
     if not new_indications:
         logger.info("[IND_MAPPING] All indications already resolved — skipping resolution")
         return [
             {
                 "indication": ind,
-                "ot_disease": existing.get(ind.strip().lower(), {}).get("ot_disease"),
-                "ot_disease_id": existing.get(ind.strip().lower(), {}).get("ot_disease_id"),
+                "ot_disease": _existing_lookup(ind).get("ot_disease"),
+                "ot_disease_id": _existing_lookup(ind).get("ot_disease_id"),
             }
             for ind in indications
         ]
 
-    # Step 3: Normalize and deduplicate
+    # Step 3: Normalize and deduplicate by spelling
     norm_to_raw: dict[str, str] = {}
     raw_to_norm: dict[str, str] = {}
     for raw in new_indications:
@@ -569,17 +814,37 @@ def run_indication_mapping(
             norm_to_raw[nk] = raw
     unique_reps = list(norm_to_raw.values())
 
-    # Step 4a: Path A — Gemini semantic matching
-    gemini_unresolved = list(unique_reps)
+    # Step 4: Semantic clustering — groups synonyms that don't share
+    # spelling (e.g. "Visceral Adipose Tissue (VAT)" / "Visceral fat")
+    # onto one canonical name, seeded with each rep's LLM-suggested OT
+    # name hint where available.
+    cluster_map = cluster_indications(unique_reps, llm_ot_name_map) if len(unique_reps) > 1 else {r: r for r in unique_reps}
+    canonical_reps = sorted(set(cluster_map.values()))
+    logger.info(
+        "[IND_MAPPING] Clustering collapsed %d indication(s) into %d canonical cluster(s)",
+        len(unique_reps), len(canonical_reps),
+    )
+    # A canonical cluster's own LLM-name hint: prefer the hint attached to
+    # whichever raw rep happens to share the canonical's exact text, else
+    # the first available hint among the cluster's members.
+    canonical_hint_map: dict[str, str] = {}
+    for rep, canonical in cluster_map.items():
+        hint = llm_ot_name_map.get(rep)
+        if hint and canonical not in canonical_hint_map:
+            canonical_hint_map[canonical] = hint
+
+    # Step 5a: Path A — Gemini semantic matching (against the target's own
+    # OT disease list — generally reliable, run on canonical clusters)
+    gemini_unresolved = list(canonical_reps)
     resolved_map: dict[str, tuple[str | None, str | None]] = {}
 
     if target_ensembl_ids:
         logger.info("[IND_MAPPING] Path A: Fetching OT diseases for %d target(s)", len(target_ensembl_ids))
         ot_diseases = fetch_all_target_diseases(target_ensembl_ids)
         if ot_diseases:
-            gemini_results = _match_all_against_ot_list(unique_reps, ot_diseases)
+            gemini_results = _match_all_against_ot_list(canonical_reps, ot_diseases)
             gemini_unresolved = []
-            for ind in unique_reps:
+            for ind in canonical_reps:
                 did, name = gemini_results.get(ind, (None, None))
                 if did:
                     resolved_map[ind] = (did, name)
@@ -593,12 +858,13 @@ def run_indication_mapping(
     else:
         logger.info("[IND_MAPPING] Path A skipped (no target_ensembl_ids provided)")
 
-    # Step 4b: Path B — OT text search
+    # Step 5b: Path B — OT text search, seeded with the LLM-suggested OT
+    # name hint (searched first) when one is available for this cluster.
     if gemini_unresolved:
         logger.info("[IND_MAPPING] Path B: OT text search for %d indication(s)", len(gemini_unresolved))
 
         def _resolve_one(ind: str) -> tuple[str, str | None, str | None]:
-            did, name = _resolve_via_ot_search(ind)
+            did, name = _resolve_via_ot_search(ind, llm_ot_name=canonical_hint_map.get(ind))
             if did:
                 logger.info("[IND_MAPPING] OT search: '%s' → %s (%s)", ind, did, name)
             else:
@@ -614,14 +880,21 @@ def run_indication_mapping(
                 ind, did, name = fut.result()
                 resolved_map[ind] = (did, name)
 
-    # Map representative results back to all raw variants
+    # Step 6: Validate every resolved mapping (Path A and Path B alike) —
+    # rejects word-overlap false positives (e.g. "renal impairment" ->
+    # "renal carcinoma") rather than storing a confidently wrong match.
+    resolved_map = validate_resolved_mappings(resolved_map)
+
+    # Map canonical cluster results back to every raw variant that fed it
     final_resolved: dict[str, tuple[str | None, str | None]] = {}
     for raw in new_indications:
         nk = raw_to_norm[raw]
         rep = norm_to_raw[nk]
-        final_resolved[raw] = resolved_map.get(rep, (None, None))
+        canonical = cluster_map.get(rep, rep)
+        final_resolved[raw] = resolved_map.get(canonical, (None, None))
 
-    # Step 5: Push new mappings to BQ
+    # Step 7: Push new mappings to BQ (one row per raw indication text,
+    # even though several raw variants may share the same resolved result)
     new_rows: list[dict] = []
     pushed_keys: set[str] = set()
     for raw, (did, name) in final_resolved.items():
@@ -635,15 +908,15 @@ def run_indication_mapping(
             })
     push_mappings(OT_DISEASE_TABLE, OT_DISEASE_SCHEMA, new_rows)
 
-    # Step 6: Return all mappings
+    # Step 8: Return all mappings
     all_mappings: list[dict] = []
     for ind in indications:
-        key = ind.strip().lower()
-        if key in existing:
+        existing_entry = _existing_lookup(ind)
+        if existing_entry:
             all_mappings.append({
                 "indication": ind,
-                "ot_disease": existing[key].get("ot_disease"),
-                "ot_disease_id": existing[key].get("ot_disease_id"),
+                "ot_disease": existing_entry.get("ot_disease"),
+                "ot_disease_id": existing_entry.get("ot_disease_id"),
             })
         elif ind in final_resolved:
             did, name = final_resolved[ind]
