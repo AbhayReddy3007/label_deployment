@@ -55,6 +55,7 @@ def fetch_trial_rows(drug_name: str = DRUG_NAME) -> list[dict]:
                dosage, trial_size, trial_location
         FROM {table_id}
         WHERE LOWER(molecule_name) = LOWER(@drug_name)
+          AND llm_confidence > 0.6
     """
     import google.cloud.bigquery as bigquery  # local import keeps gcp_utils as the single client owner
 
