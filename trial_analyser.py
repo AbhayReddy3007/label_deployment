@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import logging
 import re
-import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from medical_potential.config import (
@@ -26,6 +25,7 @@ from medical_potential.label_expansion_opportunity.indication_extractor.utils im
     TRIALS_PER_CALL,
     extract_json,
     gemini_generate,
+    gemini_generate_with_timeout,
 )
 
 from ..bq_utils import LE_TABLE, fetch_existing_trial_ids
@@ -166,45 +166,23 @@ Rules:
     # Larger batches legitimately need more time, so the timeout scales with batch size.
     timeout = TRIAL_EXTRACTION_TIMEOUT_SECONDS * len(rows)
 
-    result_holder: dict = {}
-    error_holder: dict = {}
-    for attempt in range(1, TRIAL_EXTRACTION_MAX_ATTEMPTS + 1):
-        result_holder.clear()
-        error_holder.clear()
-
-        def _call_gemini():
-            try:
-                result_holder["text"] = gemini_generate(
-                    prompt, system_instruction=system_instruction, use_search=True,
-                )
-            except Exception as exc:  # noqa: BLE001
-                error_holder["error"] = exc
-
-        thread = threading.Thread(target=_call_gemini, daemon=True)
-        thread.start()
-        thread.join(timeout=timeout)
-
-        if not thread.is_alive():
-            break  # got a response (success or error) within the timeout
-
-        if attempt < TRIAL_EXTRACTION_MAX_ATTEMPTS:
-            logger.warning(
-                "[TRIAL_ANALYSER] Timeout (>%ss) on attempt %d/%d for trial batch %s - retrying",
-                timeout, attempt, TRIAL_EXTRACTION_MAX_ATTEMPTS, trial_ids,
-            )
-        else:
-            logger.warning(
-                "[TRIAL_ANALYSER] Timeout (>%ss) on attempt %d/%d for trial batch %s - giving up",
-                timeout, attempt, TRIAL_EXTRACTION_MAX_ATTEMPTS, trial_ids,
-            )
-            return [(tid, [], "Skipped (timeout)", "") for tid in trial_ids]
-
-    if "error" in error_holder:
-        logger.warning("[TRIAL_ANALYSER] Extraction failed for trial batch %s: %s", trial_ids, error_holder["error"])
-        return [(tid, [], str(error_holder["error"]), "") for tid in trial_ids]
+    try:
+        text = gemini_generate_with_timeout(
+            prompt,
+            system_instruction=system_instruction,
+            use_search=True,
+            timeout_seconds=timeout,
+            max_attempts=TRIAL_EXTRACTION_MAX_ATTEMPTS,
+            log_context=f"trial batch {trial_ids}",
+        )
+    except TimeoutError:
+        return [(tid, [], "Skipped (timeout)", "") for tid in trial_ids]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[TRIAL_ANALYSER] Extraction failed for trial batch %s: %s", trial_ids, exc)
+        return [(tid, [], str(exc), "") for tid in trial_ids]
 
     try:
-        data = extract_json(result_holder.get("text", ""))
+        data = extract_json(text)
         raw_trials = data.get("trials", []) if isinstance(data, dict) else []
         raw_trials = [t for t in raw_trials if isinstance(t, dict)]
 
