@@ -38,8 +38,22 @@ Search the web for:
 For every additional (non-primary) indication you find evidence for,
 capture it as a candidate label-expansion opportunity.
 
+Do NOT capture as an indication:
+- Trial endpoints or outcome measures (e.g. "Exercise Capacity",
+  "Waist Circumference", "Postprandial Glucose")
+- Biomarkers or lab values (e.g. "Lipid Profile", "Hepatocyte Ballooning")
+- Pharmacokinetic parameters (e.g. "Pharmacokinetics")
+- Procedures or interventions (e.g. "Bariatric Surgery")
+Only capture things that could plausibly appear as an approved FDA
+indication - a disease or condition name.
+
 A candidate only qualifies as a secondary/label-expansion indication if:
 {SECONDARY_INDICATION_CRITERIA}
+
+Also give your best guess of each indication's standardized Open Targets
+(EFO/MONDO) disease name - the canonical disease term as it would appear
+in the Open Targets Platform, not a synonym or colloquial phrasing. If
+you are not confident, leave this null rather than guessing.
 
 Return ONLY valid JSON - no markdown fences, no explanation:
 {{
@@ -50,7 +64,8 @@ Return ONLY valid JSON - no markdown fences, no explanation:
       "indication_type": "Primary" or "Secondary",
       "therapy_area": "<Metabolic, Cardiovascular, Oncology, Neuroscience, Immunology, Respiratory, Nephrology, Hepatology, Ophthalmology, Musculoskeletal, Gastroenterology, Infectious Disease, Dermatology, Hematology, Endocrinology, Rare Disease, or another appropriate area>",
       "rationale": "<why - cite the specific source/evidence you found>",
-      "source_url": "<the URL of the source that supports this, if available>"
+      "source_url": "<the URL of the source that supports this, if available>",
+      "ot_disease_name": "<your best guess of the Open Targets disease name, or null>"
     }}
   ]
 }}
@@ -110,6 +125,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
             {
                 "drug_name": drug_name,
                 "indication": indication,
+                "llm_ot_name": opp.get("ot_disease_name") or None,
                 "rationale": (opp.get("rationale") or "").strip(),
                 "trial_title": None,
                 "trial_id": None,
