@@ -320,14 +320,34 @@ def _ensure_score_table_exists(bq_client: bigquery.Client, table_id: str) -> Non
         bq_client.update_table(table, ["schema"])
 
 
-def _json_safe(value):
-    """Converts a float NaN (which is NOT valid JSON - only 'null' is) to
-    None. BigQuery's insertAll REST API rejects a payload containing the
-    literal token 'NaN', so this must run right before serialization -
-    it's the last line of defense even if an upstream `.where(...)` should
-    have already converted NaN to None."""
+def _json_safe(value, field_type: str = "STRING"):
+    """Converts values that BigQuery's ``insertAll`` REST API would reject
+    for the given ``field_type`` into ``None``:
+
+    * ``float('nan')`` → ``None`` (NaN is not valid JSON; only ``null`` is).
+    * For ``FLOAT64`` fields: any non-numeric string (e.g. ``"N/A"``,
+      ``"n/a"``, ``"None"``, ``""``) → ``None``.  Numeric strings are
+      coerced to ``float`` so BQ can ingest them correctly.
+
+    This is the last line of defense before serialization, even if an
+    upstream step should have already cleaned the value.
+    """
+    if value is None:
+        return None
     if isinstance(value, float) and math.isnan(value):
         return None
+    if field_type == "FLOAT64":
+        if isinstance(value, (int, float)):
+            return float(value)
+        # String value in a FLOAT64 column — try to parse, else null out
+        if isinstance(value, str):
+            stripped = value.strip().lower()
+            if stripped in ("", "nan", "none", "n/a", "na", "null", "-"):
+                return None
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return None
     return value
 
 
@@ -359,9 +379,10 @@ def push_score_calculation(rows: list[dict]) -> None:
         bq_client.query(delete_query, job_config=job_config).result()
 
     insert_rows = []
+    field_type_map = {field.name: field.field_type for field in LE_SCORE_SCHEMA}
     for r in rows:
         row = {
-            field.name: _json_safe(r.get(field.name))
+            field.name: _json_safe(r.get(field.name), field_type=field_type_map.get(field.name, "STRING"))
             for field in LE_SCORE_SCHEMA
             if field.name not in ("created_at", "updated_at")
         }
