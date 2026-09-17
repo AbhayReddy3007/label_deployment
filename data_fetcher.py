@@ -458,7 +458,10 @@ Use null only if genuinely not findable. Do not guess.
 
 def _fill_missing_batch(batch: list[str]) -> dict[str, dict]:
     """Runs one enrichment batch through Gemini with a hard timeout,
-    retrying on timeout before giving up on this batch."""
+    retrying on timeout before giving up on this batch. Only the
+    Search-grounded call is used - if that comes back empty or fails,
+    the batch is left unresolved rather than retried without grounding
+    (an ungrounded lookup of a specific trial's data isn't trustworthy)."""
     # Larger batches legitimately need more time, so the timeout scales
     # with batch size (same approach as trial_analyser).
     timeout = GEMINI_FILL_TIMEOUT_SECONDS * len(batch)
@@ -471,12 +474,20 @@ def _fill_missing_batch(batch: list[str]) -> dict[str, dict]:
                 "its geographic region, drug-arm sample size, and dosage. Return ONLY valid JSON."
             ),
             use_search=True,
+            allow_ungrounded_fallback=False,
             timeout_seconds=timeout,
             max_attempts=GEMINI_FILL_MAX_ATTEMPTS,
             log_context=f"enrichment batch {batch}",
         )
     except Exception as exc:  # noqa: BLE001 - includes TimeoutError
         logger.warning("[DATA_FETCHER] Gemini fallback failed for batch %s: %s", batch, exc)
+        return {}
+
+    if not raw:
+        logger.info(
+            "[DATA_FETCHER] Empty grounded response for batch %s - leaving unresolved (no ungrounded retry)",
+            batch,
+        )
         return {}
 
     batch_results: dict[str, dict] = {}
