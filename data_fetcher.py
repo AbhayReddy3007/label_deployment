@@ -88,6 +88,15 @@ def _normalize_trial_id(trial_id) -> str:
 def fetch_le_rows(drug_name: str = DRUG_NAME, secondary_only: bool = False) -> list[dict]:
     """Fetches ``LE_TABLE`` rows for this drug (trial- and web-sourced).
 
+    Always excludes rows where ``therapy_area = 'Other'`` (case-insensitive)
+    — these are indications that couldn't be reliably classified into a
+    named therapy area (Gemini classification failure, a name mismatch
+    against the FDA disease list, or Gemini itself returning "Other"), so
+    they shouldn't be scored. As a side effect, rows with a NULL
+    ``therapy_area`` are excluded too (a NULL comparison in SQL is never
+    true), which is the desired behavior here since ``ta_i`` needs a
+    non-null therapy_area to be built.
+
     Args:
         drug_name: the drug/molecule name.
         secondary_only: if ``True``, only fetches rows where
@@ -107,6 +116,7 @@ def fetch_le_rows(drug_name: str = DRUG_NAME, secondary_only: bool = False) -> l
         WHERE LOWER(drug_name) = LOWER(@drug_name)
           AND indication IS NOT NULL
           AND indication != 'Unknown (extraction failed)'
+          AND LOWER(therapy_area) != 'other'
           {secondary_filter}
     """
     job_config = bigquery.QueryJobConfig(
@@ -115,7 +125,10 @@ def fetch_le_rows(drug_name: str = DRUG_NAME, secondary_only: bool = False) -> l
     results = bq_client.query(query, job_config=job_config).result()
     rows = [dict(row) for row in results]
     label = "Secondary" if secondary_only else "all"
-    logger.info("[DATA_FETCHER] Fetched %d %s %s row(s) for '%s'", len(rows), label, LE_TABLE, drug_name)
+    logger.info(
+        "[DATA_FETCHER] Fetched %d %s %s row(s) for '%s' (excluding therapy_area = 'Other'/NULL)",
+        len(rows), label, LE_TABLE, drug_name,
+    )
     return rows
 
 
