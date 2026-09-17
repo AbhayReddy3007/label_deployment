@@ -142,6 +142,7 @@ def merge_results(trial_rows: list[dict], web_rows: list[dict]) -> list[dict]:
 LE_RESULTS_SCHEMA: list[bigquery.SchemaField] = [
     bigquery.SchemaField("drug_name", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("indication", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("llm_ot_name", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("indication_type", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("therapy_area", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("rationale", "STRING", mode="NULLABLE"),
@@ -198,6 +199,7 @@ def push_to_bigquery(rows: list[dict]) -> None:
             None,
             bigquery.ScalarQueryParameter("drug_name", "STRING", r.get("drug_name")),
             bigquery.ScalarQueryParameter("indication", "STRING", r.get("indication")),
+            bigquery.ScalarQueryParameter("llm_ot_name", "STRING", r.get("llm_ot_name")),
             bigquery.ScalarQueryParameter("indication_type", "STRING", r.get("indication_type")),
             bigquery.ScalarQueryParameter("therapy_area", "STRING", r.get("therapy_area")),
             bigquery.ScalarQueryParameter("rationale", "STRING", r.get("rationale")),
@@ -222,6 +224,7 @@ def push_to_bigquery(rows: list[dict]) -> None:
            AND IFNULL(T.trial_id, '') = IFNULL(S.trial_id, '')
         WHEN MATCHED THEN
             UPDATE SET
+                llm_ot_name = S.llm_ot_name,
                 indication_type = S.indication_type,
                 therapy_area = S.therapy_area,
                 rationale = S.rationale,
@@ -234,10 +237,10 @@ def push_to_bigquery(rows: list[dict]) -> None:
                 data_source = S.data_source,
                 updated_at = S.updated_at
         WHEN NOT MATCHED THEN
-            INSERT (drug_name, indication, indication_type, therapy_area, rationale,
+            INSERT (drug_name, indication, llm_ot_name, indication_type, therapy_area, rationale,
                     trial_id, trial_title, phase, dosage, trial_size, trial_location,
                     source_url, data_source, created_at, updated_at)
-            VALUES (S.drug_name, S.indication, S.indication_type, S.therapy_area, S.rationale,
+            VALUES (S.drug_name, S.indication, S.llm_ot_name, S.indication_type, S.therapy_area, S.rationale,
                     S.trial_id, S.trial_title, S.phase, S.dosage, S.trial_size, S.trial_location,
                     S.source_url, S.data_source, S.updated_at, S.updated_at)
     """
