@@ -224,10 +224,15 @@ For each indication, determine:
    Respiratory, Nephrology, Hepatology, Ophthalmology, Musculoskeletal,
    Gastroenterology, Infectious Disease, Dermatology, Hematology, Endocrinology,
    Rare Disease, or another appropriate area.
+3. ot_disease_name: your best guess of this indication's standardized Open
+   Targets (EFO/MONDO) disease name - the canonical disease term as it
+   would appear in the Open Targets Platform, not a synonym or colloquial
+   phrasing. If you are not confident, use null rather than guessing.
 
 Return ONLY a JSON array:
 [
-  {{"indication": "<disease>", "therapy_area": "<area>", "indication_type": "Primary" or "Secondary"}}
+  {{"indication": "<disease>", "therapy_area": "<area>", "indication_type": "Primary" or "Secondary",
+    "ot_disease_name": "<Open Targets disease name, or null>"}}
 ]
 """
     try:
@@ -294,8 +299,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
 
     logger.info("[FDA_FETCHER] %d unique disease/condition name(s) extracted", len(disease_names))
 
-    # Step 4: Classify therapy area (indication_type is always "Primary" - see below)
-    # Step 4: Classify therapy area and indication type
+    # Step 4: Classify therapy area, indication type, and OT disease name
     classifications = _classify_indications(drug_name, disease_names)
     classified_map = {
         (c.get("indication") or "").strip().lower(): c
@@ -310,6 +314,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
         flat_rows.append({
             "drug_name": drug_name,
             "indication": disease,
+            "llm_ot_name": classification.get("ot_disease_name"),
             "indication_type": classification.get("indication_type", "Primary"),
             "therapy_area": classification.get("therapy_area", "Other"),
             "rationale": "FDA-approved indication",
