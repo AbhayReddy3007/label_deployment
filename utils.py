@@ -251,15 +251,9 @@ def extract_json(text: str) -> dict | list:
 SECONDARY_INDICATION_CRITERIA = """
 A secondary indication qualifies ONLY if ALL of the following are true:
 
-- The indication represents a true expansion - i.e., it is NOT one of the
-  drug's primary indications (for clinical assets) and is NOT part of its
-  currently approved label (for commercial assets). Note: a drug can have
-  MULTIPLE primary/approved indications at once (e.g. tirzepatide is
-  approved for both type 2 diabetes AND obesity/weight management - both
-  are Primary, regardless of which one was approved first). Do not treat
-  a later-approved indication as "Secondary" just because it came after
-  an earlier one - check whether it is CURRENTLY part of the approved
-  label, not the order in which approvals happened.
+- The indication represents a true expansion - i.e., it is not part of the
+  primary indication (for clinical assets) or currently approved label
+  (for commercial assets)
 - The indication is described at a clear disease-level definition, avoiding
   vague, overlapping, or synonymous representations
 - The source must describe observed or measured outcomes in that specific
