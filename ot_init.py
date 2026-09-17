@@ -9,9 +9,10 @@ equivalents and persists the mappings to BigQuery.
 """
 
 from .moa_mapping import run_moa_mapping
-from .indication_mapping import run_indication_mapping
+from .indication_mapping import revalidate_existing_mappings, run_indication_mapping
 
 __all__ = [
     "run_moa_mapping",
     "run_indication_mapping",
+    "revalidate_existing_mappings",
 ]
