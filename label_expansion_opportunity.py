@@ -28,7 +28,7 @@ from medical_potential.config import DRUG_NAME
 
 from .bq_utils import merge_results, push_to_bigquery
 from .indication_extractor import analyse_trials, analyse_web, analyse_fda
-from .indication_extractor.utils import PROCESS_INDICATIONS, filter_scorable_indications
+from .indication_extractor.utils import filter_scorable_indications
 from .ot_mapping import run_moa_mapping, run_indication_mapping
 from .scoring import run_score_calculation
 
@@ -115,17 +115,9 @@ def label_expansion(
     all_trial_rows = trial_rows + fda_rows
 
     # ── Step 2: Module 2 — Web Analyser ────────────────────────────────────
-    if PROCESS_INDICATIONS:
-        logger.info(
-            "[LABEL_EXPANSION] Step 2: Skipped (PROCESS_INDICATIONS=True) — web-sourced rows are "
-            "left as-is; web_analyser extracts and classifies in one combined call, so there's no "
-            "cheaper reprocess-only path for it"
-        )
-        web_rows = []
-    else:
-        logger.info("[LABEL_EXPANSION] Step 2: Extract indications from web sources (web_analyser)")
-        web_rows = analyse_web(drug_name)
-        logger.info("[LABEL_EXPANSION] Step 2 complete: %d web-sourced row(s)", len(web_rows))
+    logger.info("[LABEL_EXPANSION] Step 2: Extract indications from web sources (web_analyser)")
+    web_rows = analyse_web(drug_name)
+    logger.info("[LABEL_EXPANSION] Step 2 complete: %d web-sourced row(s)", len(web_rows))
 
     # ── Step 3: Filter non-scorable indications, merge & push to BigQuery ──
     if not all_trial_rows and not web_rows:
