@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # ==============================
 # TABLE NAMES
 # ==============================
-LE_TABLE = "label_expansion_opportunity_results"
+LE_TABLE = "glp_indications_table"
 LE_SCORE_CALCULATION_TABLE = "label_expansion_score_calculation"
 
 
