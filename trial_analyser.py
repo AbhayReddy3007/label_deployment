@@ -129,6 +129,22 @@ indications that have documented outcomes. Look at the official trial
 title, the "Conditions"/"Diseases" field, primary and secondary outcome
 measures, and the trial description.
 
+Do NOT extract as an indication:
+- Trial endpoints or outcome measures (e.g. "Exercise Capacity",
+  "Waist Circumference", "Postprandial Glucose")
+- Biomarkers or lab values (e.g. "Lipid Profile", "Hepatocyte Ballooning")
+- Pharmacokinetic parameters (e.g. "Pharmacokinetics")
+- Procedures or interventions (e.g. "Bariatric Surgery")
+Only extract things that could plausibly appear as an approved FDA
+indication - a disease or condition name.
+
+STEP 3 - Suggest the Open Targets disease name.
+For each indication, also give your best guess of its standardized
+Open Targets (EFO/MONDO) disease name - the canonical disease term as
+it would appear in the Open Targets Platform, not a synonym or
+colloquial phrasing. If you are not confident, leave this null rather
+than guessing.
+
 Trials:
 {trials_block}
 
@@ -140,7 +156,8 @@ exact Trial ID:
     {{
       "trial_id": "<exact Trial ID from input>",
       "conditions": [
-        {{"indication": "<disease or condition>", "rationale": "<why - cite the trial record field>"}}
+        {{"indication": "<disease or condition>", "rationale": "<why - cite the trial record field>",
+          "ot_disease_name": "<your best guess of the Open Targets disease name, or null>"}}
       ],
       "trial_title": "<EXACT official trial title as registered on the clinical trial registry>",
       "phase": "<Phase from the registry, e.g. Phase 1, Phase 2, Phase 3, Phase 4, Phase 2/3>"
@@ -232,12 +249,13 @@ Rules:
                 if isinstance(c, dict):
                     indication = (c.get("indication") or "").strip()
                     rationale = (c.get("rationale") or "").strip()
+                    ot_name = (c.get("ot_disease_name") or "").strip() or None
                 elif isinstance(c, str):
-                    indication, rationale = c.strip(), ""
+                    indication, rationale, ot_name = c.strip(), "", None
                 else:
                     continue
                 if indication:
-                    conditions.append({"indication": indication, "rationale": rationale})
+                    conditions.append({"indication": indication, "rationale": rationale, "ot_disease_name": ot_name})
 
             seen: set[str] = set()
             deduped = []
@@ -460,6 +478,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
                 {
                     "drug_name": row.get("molecule_name") or drug_name,
                     "indication": "Unknown (extraction failed)",
+                    "llm_ot_name": None,
                     "rationale": f"No indications could be extracted. Trial title: {trial_title}",
                     "trial_title": trial_title,
                     "trial_id": trial_id,
@@ -485,6 +504,7 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
                 {
                     "drug_name": row.get("molecule_name") or drug_name,
                     "indication": std,
+                    "llm_ot_name": c.get("ot_disease_name"),
                     "rationale": c.get("rationale", ""),
                     "trial_title": trial_title,
                     "trial_id": trial_id,
