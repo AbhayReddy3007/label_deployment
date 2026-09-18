@@ -1685,20 +1685,72 @@ def run_indication_mapping(
         if hint and canonical not in canonical_hint_map:
             canonical_hint_map[canonical] = hint
 
-    # Step 5a: Path A — Gemini semantic matching (against the target's own
-    # OT disease list — generally reliable, run on canonical clusters)
-    gemini_unresolved = list(canonical_reps)
     # Track resolution path: {indication: (did, name, path_label)}
     resolved_map: dict[str, tuple[str | None, str | None]] = {}
-    resolution_paths: dict[str, str] = {}  # indication -> "path_a" / "path_b" / "path_c"
+    resolution_paths: dict[str, str] = {}  # indication -> "direct" / "path_a" / "path_b" / "path_c"
+
+    # Step 5.0: Direct OT search — quick exact-match lookup before Gemini.
+    # Terms like "cancer", "breast cancer", "heart failure" exist as-is in
+    # OT and don't need Gemini to find them. Only keeps exact matches
+    # (case-insensitive) so there's zero risk of false positives.
+    logger.info("[IND_MAPPING] Direct OT search: checking %d indication(s) for exact matches", len(canonical_reps))
+    direct_unresolved = []
+
+    def _direct_search(ind: str) -> tuple[str, str | None, str | None]:
+        ind_lower = ind.lower().strip()
+        ind_american = _to_american(ind_lower)
+
+        # Search OT with the indication text itself
+        did, name = ot_search_disease(ind)
+        if did and name:
+            name_lower = name.lower().strip()
+            if name_lower == ind_lower or _to_american(name_lower) == ind_american:
+                return ind, did, name
+
+        # Also try with the LLM hint (searches OT with the hint, but still
+        # checks the RETURNED name against the original indication)
+        hint = canonical_hint_map.get(ind)
+        if hint:
+            did2, name2 = ot_search_disease(hint)
+            if did2 and name2:
+                name2_lower = name2.lower().strip()
+                if name2_lower == ind_lower or _to_american(name2_lower) == ind_american:
+                    return ind, did2, name2
+
+        return ind, None, None
+
+    if canonical_reps:
+        with ThreadPoolExecutor(
+            max_workers=min(_WORKERS, len(canonical_reps)),
+            thread_name_prefix="direct-search",
+        ) as exe:
+            futures = {exe.submit(_direct_search, ind): ind for ind in canonical_reps}
+            for fut in as_completed(futures):
+                ind, did, name = fut.result()
+                if did and name:
+                    resolved_map[ind] = (did, name)
+                    resolution_paths[ind] = "direct"
+                    logger.info("[IND_MAPPING] Direct exact match: '%s' → %s (%s)", ind, did, name)
+                else:
+                    direct_unresolved.append(ind)
+
+    direct_matched = len(canonical_reps) - len(direct_unresolved)
+    logger.info(
+        "[IND_MAPPING] Direct OT search: %d/%d exact match(es), %d remaining for Path A",
+        direct_matched, len(canonical_reps), len(direct_unresolved),
+    )
+
+    # Step 5a: Path A — Gemini semantic matching (against the target's own
+    # OT disease list — for indications that didn't exact-match in OT)
+    gemini_unresolved = list(direct_unresolved)
 
     if target_ensembl_ids:
         logger.info("[IND_MAPPING] Path A: Fetching OT diseases for %d target(s)", len(target_ensembl_ids))
         ot_diseases = fetch_all_target_diseases(target_ensembl_ids)
         if ot_diseases:
-            gemini_results = _match_all_against_ot_list(canonical_reps, ot_diseases)
+            gemini_results = _match_all_against_ot_list(direct_unresolved, ot_diseases)
             gemini_unresolved = []
-            for ind in canonical_reps:
+            for ind in direct_unresolved:
                 did, name = gemini_results.get(ind, (None, None))
                 if did:
                     resolved_map[ind] = (did, name)
