@@ -9,12 +9,17 @@ using a multi-path approach:
       asks Gemini to semantically match indications against it.
   Path B (OT text search fallback): progressive search with synonym
       expansion, parenthetical stripping, and term shortening.
+      Includes retry-with-backoff for rate-limited responses.
+  Path C (Gemini + Google Search grounding): web-search-grounded
+      resolution for anything Path A and B miss, with OT API
+      verification of returned IDs to reject hallucinations.
 
 Already-resolved indications (present in ``OT_DISEASE_TABLE``) are
 skipped so only new values hit the API.
 
 Resolved mappings are pushed to ``PROJECT_ID.BQ_DATASET_ID.OT_DISEASE_TABLE``
-with columns ``indication`` and ``ot_disease``.
+with columns ``indication``, ``ot_disease``, ``ot_disease_id``, and
+``resolution_path`` (tracks which path resolved each mapping for auditing).
 """
 
 from __future__ import annotations
@@ -50,6 +55,7 @@ OT_DISEASE_SCHEMA: list[bigquery.SchemaField] = [
     bigquery.SchemaField("indication", "STRING", mode="REQUIRED"),
     bigquery.SchemaField("ot_disease", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("ot_disease_id", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("resolution_path", "STRING", mode="NULLABLE"),
     bigquery.SchemaField("created_at", "TIMESTAMP", mode="NULLABLE"),
     bigquery.SchemaField("updated_at", "TIMESTAMP", mode="NULLABLE"),
 ]
@@ -59,12 +65,47 @@ OT_DISEASE_SCHEMA: list[bigquery.SchemaField] = [
 # ==============================
 _DISEASE_CHUNK_SIZE = 200
 _WORKERS = 3
+_OT_SEARCH_PAGE_SIZE = 15  # was 5 — larger window catches better matches
+_OT_MAX_RETRIES = 3        # retry OT API calls with exponential backoff
 
 _MEASUREMENT_PREFIXES = ("measurement", "process", "risk measurement", "risk factor")
 
 MEDICAL_SYNONYMS: dict[str, list[str]] = {
+    # --- Cardiovascular ---
     "hfpef":         ["heart failure with preserved ejection fraction", "heart failure"],
     "hfref":         ["heart failure with reduced ejection fraction", "heart failure"],
+    "chf":           ["congestive heart failure", "heart failure"],
+    "mace":          ["major adverse cardiovascular event", "cardiovascular disease"],
+    "mi":            ["myocardial infarction"],
+    "af":            ["atrial fibrillation"],
+    "pad":           ["peripheral artery disease", "peripheral arterial disease"],
+    "htn":           ["hypertension"],
+    "cad":           ["coronary artery disease"],
+    "cvd":           ["cardiovascular disease"],
+    "acs":           ["acute coronary syndrome"],
+    "dvt":           ["deep vein thrombosis"],
+    "pe":            ["pulmonary embolism"],
+    "vte":           ["venous thromboembolism"],
+    "aaa":           ["abdominal aortic aneurysm"],
+    "svt":           ["supraventricular tachycardia"],
+    "pah":           ["pulmonary arterial hypertension"],
+    "tia":           ["transient ischemic attack", "transient ischaemic attack"],
+    "dcm":           ["dilated cardiomyopathy"],
+    "hcm":           ["hypertrophic cardiomyopathy"],
+    # --- Metabolic / Endocrine ---
+    "t2dm":          ["type 2 diabetes mellitus"],
+    "t1dm":          ["type 1 diabetes mellitus"],
+    "t2d":           ["type 2 diabetes mellitus"],
+    "t1d":           ["type 1 diabetes mellitus"],
+    "dm":            ["diabetes mellitus"],
+    "dka":           ["diabetic ketoacidosis"],
+    "bmi":           ["body mass index", "obesity"],
+    "dyslipidemia":  ["dyslipidaemia", "hyperlipidemia", "hyperlipidaemia"],
+    "dyslipidaemia": ["dyslipidemia", "hyperlipidaemia", "hyperlipidemia"],
+    "hyperlipidemia": ["hyperlipidaemia", "dyslipidemia"],
+    "hyperlipidaemia": ["hyperlipidemia", "dyslipidaemia"],
+    "pcos":          ["polycystic ovary syndrome", "polycystic ovarian syndrome"],
+    # --- Liver ---
     "nafld":         ["non-alcoholic fatty liver disease",
                       "metabolic dysfunction-associated steatotic liver disease"],
     "nash":          ["non-alcoholic steatohepatitis",
@@ -73,40 +114,210 @@ MEDICAL_SYNONYMS: dict[str, list[str]] = {
                       "non-alcoholic steatohepatitis"],
     "masld":         ["metabolic dysfunction-associated steatotic liver disease",
                       "non-alcoholic fatty liver disease"],
-    "mace":          ["major adverse cardiovascular event", "cardiovascular disease"],
-    "dyslipidemia":  ["dyslipidaemia", "hyperlipidemia"],
-    "dyslipidaemia": ["dyslipidemia", "hyperlipidaemia"],
+    "hcc":           ["hepatocellular carcinoma"],
+    "psc":           ["primary sclerosing cholangitis"],
+    "pbc":           ["primary biliary cholangitis", "primary biliary cirrhosis"],
+    "ald":           ["alcohol-related liver disease", "alcoholic liver disease"],
+    # --- Renal ---
     "ckd":           ["chronic kidney disease"],
+    "aki":           ["acute kidney injury"],
+    "esrd":          ["end-stage renal disease", "end-stage kidney disease"],
+    "rcc":           ["renal cell carcinoma"],
+    "dkd":           ["diabetic kidney disease", "diabetic nephropathy"],
+    "fsgs":          ["focal segmental glomerulosclerosis"],
+    # --- Respiratory ---
     "copd":          ["chronic obstructive pulmonary disease"],
-    "osa":           ["obstructive sleep apnea"],
-    "t2dm":          ["type 2 diabetes mellitus"],
-    "t1dm":          ["type 1 diabetes mellitus"],
-    "t2d":           ["type 2 diabetes mellitus"],
-    "aud":           ["alcohol use disorder"],
-    "pcos":          ["polycystic ovary syndrome"],
-    "ibs":           ["irritable bowel syndrome"],
-    "ra":            ["rheumatoid arthritis"],
-    "sle":           ["systemic lupus erythematosus"],
-    "ms":            ["multiple sclerosis"],
-    "als":           ["amyotrophic lateral sclerosis"],
-    "chf":           ["congestive heart failure", "heart failure"],
-    "mi":            ["myocardial infarction"],
-    "af":            ["atrial fibrillation"],
-    "pad":           ["peripheral artery disease"],
-    "htn":           ["hypertension"],
-    "cad":           ["coronary artery disease"],
-    "cvd":           ["cardiovascular disease"],
-    "gerd":          ["gastroesophageal reflux disease"],
+    "osa":           ["obstructive sleep apnea", "obstructive sleep apnoea"],
+    "ards":          ["acute respiratory distress syndrome"],
+    "ipf":           ["idiopathic pulmonary fibrosis"],
+    "cf":            ["cystic fibrosis"],
+    # --- GI ---
+    "gerd":          ["gastroesophageal reflux disease", "gastro-oesophageal reflux disease"],
     "ibd":           ["inflammatory bowel disease"],
     "uc":            ["ulcerative colitis"],
-    "cd":            ["Crohn disease"],
-    "ad":            ["Alzheimer disease"],
-    "pd":            ["Parkinson disease"],
+    "cd":            ["Crohn disease", "Crohn's disease"],
+    "ibs":           ["irritable bowel syndrome"],
+    "sbs":           ["short bowel syndrome"],
+    # --- Neurological ---
+    "ad":            ["Alzheimer disease", "Alzheimer's disease"],
+    "pd":            ["Parkinson disease", "Parkinson's disease"],
+    "ms":            ["multiple sclerosis"],
+    "als":           ["amyotrophic lateral sclerosis"],
     "mdd":           ["major depressive disorder"],
     "adhd":          ["attention deficit hyperactivity disorder"],
+    "gad":           ["generalized anxiety disorder", "generalised anxiety disorder"],
+    "ptsd":          ["post-traumatic stress disorder"],
+    "ocd":           ["obsessive-compulsive disorder"],
+    "tbi":           ["traumatic brain injury"],
+    # --- Oncology ---
+    "nsclc":         ["non-small cell lung cancer", "non-small cell lung carcinoma"],
+    "sclc":          ["small cell lung cancer", "small cell lung carcinoma"],
+    "crc":           ["colorectal cancer", "colorectal carcinoma"],
+    "aml":           ["acute myeloid leukemia", "acute myeloid leukaemia"],
+    "all":           ["acute lymphoblastic leukemia", "acute lymphoblastic leukaemia"],
+    "cml":           ["chronic myeloid leukemia", "chronic myeloid leukaemia"],
+    "cll":           ["chronic lymphocytic leukemia", "chronic lymphocytic leukaemia"],
+    "dlbcl":         ["diffuse large B-cell lymphoma"],
+    "nhl":           ["non-Hodgkin lymphoma"],
+    "mm":            ["multiple myeloma"],
+    "mds":           ["myelodysplastic syndrome"],
+    "tnbc":          ["triple-negative breast cancer"],
+    "gist":          ["gastrointestinal stromal tumor", "gastrointestinal stromal tumour"],
+    # --- Musculoskeletal / Autoimmune ---
+    "ra":            ["rheumatoid arthritis"],
+    "sle":           ["systemic lupus erythematosus"],
     "oa":            ["osteoarthritis"],
-    "bmi":           ["body mass index", "obesity"],
+    "as":            ["ankylosing spondylitis"],
+    "psa":           ["psoriatic arthritis"],
+    "jia":           ["juvenile idiopathic arthritis"],
+    "gca":           ["giant cell arteritis"],
+    "ssc":           ["systemic sclerosis", "scleroderma"],
+    # --- Dermatological ---
+    "csu":           ["chronic spontaneous urticaria"],
+    "aa":            ["alopecia areata"],
+    "hs":            ["hidradenitis suppurativa"],
+    # --- Hematological ---
+    "itp":           ["immune thrombocytopenia", "idiopathic thrombocytopenic purpura"],
+    "ttp":           ["thrombotic thrombocytopenic purpura"],
+    "hit":           ["heparin-induced thrombocytopenia"],
+    "pnh":           ["paroxysmal nocturnal hemoglobinuria", "paroxysmal nocturnal haemoglobinuria"],
+    "scd":           ["sickle cell disease"],
+    # --- Other ---
+    "aud":           ["alcohol use disorder"],
+    "sud":           ["substance use disorder"],
+    "uti":           ["urinary tract infection"],
+    "bph":           ["benign prostatic hyperplasia"],
+    "eds":           ["excessive daytime sleepiness"],
+    "hiv":           ["human immunodeficiency virus infection"],
+    "tb":            ["tuberculosis"],
+    "iga":           ["immunoglobulin A nephropathy", "IgA nephropathy"],
+    "mg":            ["myasthenia gravis"],
+    "nmo":           ["neuromyelitis optica"],
 }
+
+# ==============================
+# BRITISH ↔ AMERICAN SPELLING NORMALIZATION
+# ==============================
+# We normalize TO American English so both forms map to one key.
+_BRIT_TO_AMERICAN: dict[str, str] = {
+    "oedema": "edema",
+    "tumour": "tumor",
+    "anaemia": "anemia",
+    "leukaemia": "leukemia",
+    "haemorrhage": "hemorrhage",
+    "haemophilia": "hemophilia",
+    "haemoglobin": "hemoglobin",
+    "haemolytic": "hemolytic",
+    "haematological": "hematological",
+    "haematopoietic": "hematopoietic",
+    "oestrogen": "estrogen",
+    "foetus": "fetus",
+    "foetal": "fetal",
+    "coeliac": "celiac",
+    "paediatric": "pediatric",
+    "orthopaedic": "orthopedic",
+    "gynaecological": "gynecological",
+    "diarrhoea": "diarrhea",
+    "apnoea": "apnea",
+    "ischaemic": "ischemic",
+    "ischaemia": "ischemia",
+    "oesophageal": "esophageal",
+    "oesophagus": "esophagus",
+    "hypoglycaemia": "hypoglycemia",
+    "hyperglycaemia": "hyperglycemia",
+    "dyslipidaemia": "dyslipidemia",
+    "hyperlipidaemia": "hyperlipidemia",
+    "septicaemia": "septicemia",
+    "bacteraemia": "bacteremia",
+    "uraemia": "uremia",
+    "thalassaemia": "thalassemia",
+    "fibre": "fiber",
+    "labelling": "labeling",
+    "modelling": "modeling",
+}
+
+# Build regex for fast British→American replacement
+_BRIT_PATTERN = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in sorted(_BRIT_TO_AMERICAN, key=len, reverse=True)) + r")\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _to_american(text: str) -> str:
+    """Replace British medical spellings with American equivalents (case-insensitive)."""
+    def _replace(m: re.Match) -> str:
+        word = m.group(0)
+        replacement = _BRIT_TO_AMERICAN.get(word.lower(), word)
+        # Preserve original casing style
+        if word[0].isupper():
+            return replacement.capitalize()
+        return replacement
+    return _BRIT_PATTERN.sub(_replace, text)
+
+
+# ==============================
+# GENERIC MEDICAL WORDS (for IDF-like scoring)
+# ==============================
+# High-frequency words that carry less weight in overlap scoring.
+# "renal" + "disease" overlap is weaker than "steatohepatitis" overlap.
+_GENERIC_MEDICAL_WORDS: frozenset[str] = frozenset({
+    "disease", "disorder", "syndrome", "condition", "chronic", "acute",
+    "type", "stage", "grade", "risk", "primary", "secondary", "severe",
+    "mild", "moderate", "progressive", "recurrent", "advanced", "early",
+    "late", "unspecified", "other", "related", "associated", "induced",
+    "major", "minor", "generalized", "generalised", "systemic", "local",
+    "idiopathic", "acquired", "congenital", "hereditary", "familial",
+    "benign", "malignant", "metastatic", "refractory", "resistant",
+    "impairment", "insufficiency", "failure", "injury", "infection",
+    "inflammation", "neoplasm", "tumor", "tumour", "carcinoma", "cancer",
+})
+
+# Specific clinical terms score higher (not in the generic set).
+_GENERIC_WORD_WEIGHT = 2    # weight for generic words
+_SPECIFIC_WORD_WEIGHT = 8   # weight for specific clinical terms
+_EXTRA_WORD_PENALTY = 3     # penalty per extra word in hit not in query
+
+
+def _weighted_word_score(query_words: set[str], hit_words: set[str]) -> float:
+    """IDF-like scoring: specific clinical terms count more than generic ones."""
+    overlap = query_words & hit_words
+    extra = hit_words - query_words
+    score = 0.0
+    for w in overlap:
+        score += _GENERIC_WORD_WEIGHT if w in _GENERIC_MEDICAL_WORDS else _SPECIFIC_WORD_WEIGHT
+    for w in extra:
+        score -= _EXTRA_WORD_PENALTY if w not in _GENERIC_MEDICAL_WORDS else 1
+    return score
+
+
+# ==============================
+# CLINICALLY MEANINGFUL PARENTHETICALS
+# ==============================
+# Parenthetical content matching these patterns is KEPT during normalization
+# (e.g. "Type 2", "Stage III", "Grade 2") because it distinguishes
+# clinically different conditions.
+_CLINICAL_PAREN_RE = re.compile(
+    r"\b(type\s*\d|stage\s*[ivxIVX\d]+|grade\s*\d|class\s*[ivxIVX\d]+|"
+    r"group\s*\d|phase\s*[ivxIVX\d]+|category\s*\d|variant\s*\d|"
+    r"subtype\s*\w+|genotype\s*\d)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _is_abbreviation_only_paren(content: str) -> bool:
+    """Returns True if the parenthetical is just an abbreviation/acronym
+    (e.g. 'NAFLD', 'CKD') and NOT clinically meaningful content."""
+    content = content.strip()
+    # Pure abbreviation: all uppercase, optionally with digits/hyphens
+    if re.fullmatch(r"[A-Z][A-Z0-9\-]{0,10}", content):
+        return True
+    # Check if it contains clinically meaningful info
+    if _CLINICAL_PAREN_RE.search(content):
+        return False
+    # Short annotations that are just labels
+    if len(content.split()) <= 2 and content.isupper():
+        return True
+    return False
 
 
 # ==============================
@@ -120,19 +331,60 @@ def normalize_indication(ind: str) -> str:
     ``'nonalcoholic fatty liver disease'`` (same as ``'Non-alcoholic
     fatty liver disease'``).
 
-    Strips: casing, intra-word hyphens, trailing parenthetical
-    abbreviations/annotations (e.g. ``(NAFLD)``, ``(NASH)``,
-    ``(MASLD)``, ``(CKD)``), and collapses whitespace.
+    Preserves clinically meaningful parentheticals (e.g. ``(Type 2)``,
+    ``(Stage III)``) while stripping abbreviation-only ones (e.g.
+    ``(NAFLD)``, ``(CKD)``).
+
+    Normalizes British→American spelling so ``oedema`` and ``edema``
+    map to the same key.
+
+    Strips: casing, intra-word hyphens, abbreviation-only parentheticals,
+    and collapses whitespace.
     """
     s = ind.strip()
-    # Strip parenthetical abbreviations/annotations anywhere in the string
-    # (e.g. "(NAFLD)", "(CKD)", "(PCOS)") so variants with and without them
-    # normalize to the same key.
-    s = re.sub(r"\s*\([^)]*\)", "", s).strip()
+    # Selectively strip parentheticals: only abbreviation-only ones,
+    # preserve clinically meaningful content like (Type 2), (Stage III)
+    def _strip_paren(m: re.Match) -> str:
+        content = m.group(1)
+        if _is_abbreviation_only_paren(content):
+            return ""
+        # Keep the parenthetical content but remove the parens themselves
+        return " " + content.strip()
+
+    s = re.sub(r"\s*\(([^)]*)\)", _strip_paren, s).strip()
     s = re.sub(r"\s+", " ", s).lower()
     # Strip intra-word hyphens (pre-diabetes → prediabetes)
     s = re.sub(r"(?<=\w)-(?=\w)", "", s)
+    # Normalize British → American spelling
+    s = _to_american(s)
     return re.sub(r"\s+", " ", s).strip()
+
+
+# ==============================
+# OT API CALL WITH RETRY
+# ==============================
+def _ot_post_with_retry(
+    query: str,
+    variables: dict,
+    context: str = "",
+    max_retries: int = _OT_MAX_RETRIES,
+) -> dict | None:
+    """Wraps ``ot_post`` with exponential backoff for transient failures
+    (rate limits, timeouts). Returns None only after all retries exhausted."""
+    for attempt in range(1, max_retries + 1):
+        data = ot_post(query, variables, context=context)
+        if data is not None:
+            return data
+        if attempt < max_retries:
+            wait = 2 ** attempt  # 2s, 4s, 8s
+            logger.warning(
+                "[IND_MAPPING] OT API returned None for '%s' (attempt %d/%d) — "
+                "retrying in %ds",
+                context, attempt, max_retries, wait,
+            )
+            time.sleep(wait)
+    logger.warning("[IND_MAPPING] OT API failed after %d attempts for '%s'", max_retries, context)
+    return None
 
 
 # ==============================
@@ -146,19 +398,29 @@ def _is_disease_hit(name: str | None) -> bool:
 
 
 def ot_search_disease(name: str) -> tuple[str | None, str | None]:
-    """Search OT for a disease by name. Returns ``(disease_id, disease_name)``."""
-    graphql = """
-    query SearchDisease($q: String!) {
-      search(queryString: $q, entityNames: ["disease"], page: {index: 0, size: 5}) {
-        hits {
+    """Search OT for a disease by name. Returns ``(disease_id, disease_name)``.
+
+    Uses a page size of ``_OT_SEARCH_PAGE_SIZE`` (15) to catch better
+    matches that would be missed at size 5. Scoring uses IDF-like
+    weighting so generic words (disease, syndrome) count less than
+    specific clinical terms.
+    """
+    graphql = f"""
+    query SearchDisease($q: String!) {{
+      search(queryString: $q, entityNames: ["disease"], page: {{index: 0, size: {_OT_SEARCH_PAGE_SIZE}}}) {{
+        hits {{
           id
-          object { ... on Disease { name } }
-        }
-      }
-    }
+          object {{ ... on Disease {{ name }} }}
+        }}
+      }}
+    }}
     """
     search_queries = [name]
     name_lower = name.lower()
+    # British/American spelling variant generation for search
+    american = _to_american(name)
+    if american.lower() != name_lower:
+        search_queries.append(american)
     if "emia" in name_lower:
         search_queries.append(re.sub(r"emia\b", "aemia", name, flags=re.IGNORECASE))
     elif "aemia" in name_lower:
@@ -169,7 +431,7 @@ def ot_search_disease(name: str) -> tuple[str | None, str | None]:
     all_candidates: list[tuple[str, str]] = []
     seen_ids: set[str] = set()
     for sq in search_queries:
-        data = ot_post(graphql, {"q": sq}, context=f"disease-search:{sq}")
+        data = _ot_post_with_retry(graphql, {"q": sq}, context=f"disease-search:{sq}")
         if data:
             for h in data.get("search", {}).get("hits", []):
                 hid = h["id"]
@@ -180,7 +442,7 @@ def ot_search_disease(name: str) -> tuple[str | None, str | None]:
     if not all_candidates:
         return None, None
 
-    # Score candidates
+    # Score candidates with IDF-like weighting
     query_words = set(re.findall(r"[a-z]{3,}", name.lower()))
     best_id, best_name, best_score = None, None, -999.0
 
@@ -195,10 +457,11 @@ def ot_search_disease(name: str) -> tuple[str | None, str | None]:
             score += 50
         elif re.sub(r"aemia\b", "emia", cname_lower) == query_lower:
             score += 50
+        elif _to_american(cname_lower) == _to_american(query_lower):
+            score += 50
 
         hit_words = set(re.findall(r"[a-z]{3,}", cname_lower))
-        score += len(query_words & hit_words) * 5
-        score -= len(hit_words - query_words) * 2
+        score += _weighted_word_score(query_words, hit_words)
         score -= rank * 0.1
 
         if score > best_score:
@@ -226,6 +489,11 @@ def _fallback_search_terms(ind: str) -> list[str]:
         acronym = paren_match.group(1).strip().lower()
         if acronym in MEDICAL_SYNONYMS:
             terms.extend(MEDICAL_SYNONYMS[acronym])
+
+    # British/American spelling variant
+    american = _to_american(ind)
+    if american.lower() != ind_lower:
+        terms.append(american)
 
     # Strip parentheticals
     if paren_base and paren_base != ind:
@@ -281,6 +549,8 @@ def _resolve_via_ot_search(ind: str, llm_ot_name: str | None = None) -> tuple[st
     time), is searched FIRST - it's usually a more accurate query than
     the raw extracted indication text, since it's already phrased in
     standard disease terminology.
+
+    Uses IDF-like scoring to downweight generic medical terms.
     """
     search_terms = ([llm_ot_name] if llm_ot_name else []) + [ind] + _fallback_search_terms(ind)
     candidates: list[tuple[str, str, str]] = []
@@ -296,7 +566,7 @@ def _resolve_via_ot_search(ind: str, llm_ot_name: str | None = None) -> tuple[st
     if not candidates:
         return None, None
 
-    # Score candidates
+    # Score candidates with IDF-like weighting
     ind_words = set(re.findall(r"[a-z]{3,}", ind.lower()))
     best_id, best_name, best_score = None, None, -999.0
 
@@ -309,14 +579,14 @@ def _resolve_via_ot_search(ind: str, llm_ot_name: str | None = None) -> tuple[st
             score += 200
         elif re.sub(r"aemia\b", "emia", cname_lower) == ind_lower_s:
             score += 200
+        elif _to_american(cname_lower) == _to_american(ind_lower_s):
+            score += 200
 
         if _is_disease_hit(cname):
             score += 100
 
         hit_words = set(re.findall(r"[a-z]{3,}", cname_lower))
-        score += len(ind_words & hit_words) * 5
-        extra = len(hit_words - ind_words)
-        score -= extra * 4
+        score += _weighted_word_score(ind_words, hit_words)
 
         if score > best_score:
             best_score = score
@@ -353,7 +623,7 @@ def fetch_all_target_diseases(
         total = None
         fetched = 0
         while True:
-            data = ot_post(
+            data = _ot_post_with_retry(
                 query,
                 {"targetId": tid, "index": page_index, "size": page_size},
                 context=f"target-diseases:{tid}:p{page_index}",
@@ -615,14 +885,89 @@ Every indication listed above must appear in exactly one cluster's
         return {ind: ind for ind in indications}
 
 
+def _reconcile_cross_chunk_canonicals(
+    canonical_names: list[str],
+    llm_ot_name_map: dict[str, str],
+) -> dict[str, str]:
+    """Cross-chunk reconciliation: takes canonical names from all chunks
+    and merges any that are synonyms of each other. This catches synonyms
+    that were split across different clustering chunks.
+
+    Returns ``{canonical: merged_canonical}`` — identity for names that
+    don't merge with anything.
+    """
+    if len(canonical_names) <= 1:
+        return {c: c for c in canonical_names}
+
+    # If the list is small enough, no reconciliation needed
+    # (all fit in one chunk, so they were already clustered together)
+    if len(canonical_names) <= _CLUSTER_CHUNK_SIZE:
+        # Still run reconciliation — these are from DIFFERENT chunks
+        pass
+
+    lines = []
+    for i, name in enumerate(canonical_names):
+        hint = llm_ot_name_map.get(name)
+        lines.append(f"{i + 1}. {name}" + (f" (OT hint: {hint})" if hint else ""))
+    name_block = "\n".join(lines)
+
+    prompt = f"""You are a biomedical terminology expert.
+
+Below is a list of canonical disease/condition names that were produced
+by clustering indications in separate batches. Some of these canonical
+names may STILL refer to the same underlying disease under different
+wording (e.g. "Non-alcoholic fatty liver disease" and "Metabolic
+dysfunction-associated steatotic liver disease" are the same disease).
+
+Merge any that refer to the same condition. For each merged group, pick
+the most standard/current name as the single canonical.
+
+Names:
+{name_block}
+
+Return ONLY a JSON array - no markdown fences:
+[
+  {{"canonical": "<merged canonical>", "members": ["<name 1>", "<name 2>", ...]}}
+]
+Every name above must appear in exactly one group's "members", even if
+the group has only one member (no merge needed).
+"""
+    try:
+        text = gemini_call(prompt)
+        parsed = parse_json_response(text)
+        mapping: dict[str, str] = {}
+        input_lower = {n.strip().lower(): n for n in canonical_names}
+        for c in parsed if isinstance(parsed, list) else []:
+            if not isinstance(c, dict):
+                continue
+            canonical = (c.get("canonical") or "").strip()
+            if not canonical:
+                continue
+            for member in c.get("members", []) if isinstance(c.get("members"), list) else []:
+                orig = input_lower.get((member or "").strip().lower())
+                if orig:
+                    mapping[orig] = canonical
+        for n in canonical_names:
+            mapping.setdefault(n, n)
+        merged_count = len(canonical_names) - len(set(mapping.values()))
+        if merged_count > 0:
+            logger.info(
+                "[IND_MAPPING] Cross-chunk reconciliation merged %d canonical name(s)",
+                merged_count,
+            )
+        return mapping
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[IND_MAPPING] Cross-chunk reconciliation failed: %s — skipping", exc)
+        return {c: c for c in canonical_names}
+
+
 def cluster_indications(indications: list[str], llm_ot_name_map: dict[str, str] | None = None) -> dict[str, str]:
     """Groups indications describing the same clinical concept so they
     resolve to (and score as) a single TA-I instead of several duplicates.
 
-    Chunks large lists (``_CLUSTER_CHUNK_SIZE`` at a time) since clustering
-    quality degrades with an overlong prompt; synonyms that happen to fall
-    in different chunks won't be merged, which is an acceptable trade-off
-    at typical per-drug indication counts.
+    Chunks large lists (``_CLUSTER_CHUNK_SIZE`` at a time), then runs a
+    cross-chunk reconciliation pass to merge canonical names from different
+    chunks that are synonyms of each other.
 
     Returns ``{raw_indication: canonical_indication}`` - every input maps
     to something, even if only to itself.
@@ -643,6 +988,16 @@ def cluster_indications(indications: list[str], llm_ot_name_map: dict[str, str] 
     mapping: dict[str, str] = {}
     for chunk in chunks:
         mapping.update(_cluster_chunk(chunk, llm_ot_name_map))
+
+    # Cross-chunk reconciliation: merge canonical names from different
+    # chunks that refer to the same disease
+    if len(chunks) > 1:
+        canonical_names = sorted(set(mapping.values()))
+        if len(canonical_names) > 1:
+            reconciled = _reconcile_cross_chunk_canonicals(canonical_names, llm_ot_name_map)
+            # Re-map through the reconciliation
+            mapping = {raw: reconciled.get(canonical, canonical) for raw, canonical in mapping.items()}
+
     return mapping
 
 
@@ -724,9 +1079,35 @@ Return ONLY a JSON array — no markdown fences, no explanation:
         return {}
 
 
+def _verify_ot_id(disease_id: str) -> tuple[str | None, str | None]:
+    """Verify an EFO/MONDO ID actually exists in the OT API.
+
+    Returns ``(disease_id, disease_name)`` if valid, ``(None, None)`` if
+    the ID doesn't exist (hallucinated by Gemini).
+    """
+    graphql = """
+    query VerifyDisease($id: String!) {
+      disease(efoId: $id) {
+        id
+        name
+      }
+    }
+    """
+    data = _ot_post_with_retry(graphql, {"id": disease_id}, context=f"verify-id:{disease_id}")
+    if not data:
+        return None, None
+    disease = data.get("disease")
+    if not disease or not disease.get("id"):
+        return None, None
+    return disease["id"], disease.get("name", "")
+
+
 def resolve_via_search_grounding(unresolved: list[str]) -> dict[str, tuple[str | None, str | None]]:
     """Batched Path C: resolves unmatched indications via Gemini + Google
     Search grounding, ``_PATH_C_BATCH_SIZE`` at a time.
+
+    After Gemini returns IDs, each is **verified against the OT API** to
+    reject hallucinated IDs that don't actually exist in Open Targets.
 
     Called after Path A and Path B, for any indications they left with
     ``(None, None)``. Returns ``{indication: (ot_disease_id, ot_disease_name)}``.
@@ -742,22 +1123,51 @@ def resolve_via_search_grounding(unresolved: list[str]) -> dict[str, tuple[str |
         unresolved[i : i + _PATH_C_BATCH_SIZE]
         for i in range(0, len(unresolved), _PATH_C_BATCH_SIZE)
     ]
-    results: dict[str, tuple[str | None, str | None]] = {}
+    raw_results: dict[str, tuple[str | None, str | None]] = {}
     for batch in batches:
-        results.update(_resolve_via_search_grounding_batch(batch))
+        raw_results.update(_resolve_via_search_grounding_batch(batch))
 
-    resolved_count = sum(1 for did, name in results.values() if did and name)
+    # Verify every ID returned by Path C against the OT API
+    verified_results: dict[str, tuple[str | None, str | None]] = {}
+    ids_to_verify: dict[str, list[str]] = {}  # disease_id -> [indications]
+    for ind, (did, name) in raw_results.items():
+        if did and name:
+            ids_to_verify.setdefault(did, []).append(ind)
+        else:
+            verified_results[ind] = (None, None)
+
+    verified_cache: dict[str, tuple[str | None, str | None]] = {}
+    rejected_count = 0
+    for did, inds in ids_to_verify.items():
+        if did not in verified_cache:
+            verified_cache[did] = _verify_ot_id(did)
+        verified_id, verified_name = verified_cache[did]
+        for ind in inds:
+            if verified_id:
+                # Use the verified name from OT (more authoritative than Gemini's)
+                verified_results[ind] = (verified_id, verified_name)
+            else:
+                logger.warning(
+                    "[IND_MAPPING] Path C: rejected hallucinated ID '%s' for '%s'",
+                    did, ind,
+                )
+                verified_results[ind] = (None, None)
+                rejected_count += 1
+
+    resolved_count = sum(1 for did, name in verified_results.values() if did and name)
     logger.info(
-        "[IND_MAPPING] Path C resolved %d/%d indication(s) via search grounding",
-        resolved_count, len(unresolved),
+        "[IND_MAPPING] Path C resolved %d/%d indication(s) via search grounding "
+        "(%d hallucinated ID(s) rejected)",
+        resolved_count, len(unresolved), rejected_count,
     )
-    return results
+    return verified_results
 
 
 # ==============================
 # MATCH VALIDATION (rejects word-overlap false positives)
 # ==============================
 _VALIDATE_BATCH_SIZE = 20
+_VALIDATE_MAX_RETRIES = 2  # retry validation before failing closed
 
 
 def _validate_match_batch(pairs: list[tuple[str, str]]) -> dict[str, bool]:
@@ -766,7 +1176,12 @@ def _validate_match_batch(pairs: list[tuple[str, str]]) -> dict[str, bool]:
     match - not just a word-overlap false positive (e.g. "renal
     impairment" matched to "renal carcinoma" shares a word but is NOT a
     valid match; they must refer to the same or a closely related
-    disease). Returns ``{indication_lower: is_valid}``."""
+    disease). Returns ``{indication_lower: is_valid}``.
+
+    **Fail-closed**: on error after retries, all matches in the batch
+    are marked INVALID (False) rather than silently accepted. A null
+    mapping is preferable to a confidently wrong one.
+    """
     if not pairs:
         return {}
 
@@ -793,22 +1208,39 @@ Return ONLY a JSON array - no markdown fences, no explanation:
   {{"indication": "<exact indication text>", "valid": true or false}}
 ]
 """
-    try:
-        text = gemini_call(prompt)
-        parsed = parse_json_response(text)
-        result: dict[str, bool] = {}
-        for e in parsed if isinstance(parsed, list) else []:
-            if not isinstance(e, dict):
-                continue
-            ind = (e.get("indication") or "").strip().lower()
-            if ind:
-                result[ind] = bool(e.get("valid", True))
-        return result
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("[IND_MAPPING] Match validation failed for batch %s: %s", pairs, exc)
-        # Fail open: on error, keep the match rather than silently
-        # discarding a possibly-correct resolution.
-        return {ind.lower(): True for ind, _ in pairs}
+    last_exc = None
+    for attempt in range(1, _VALIDATE_MAX_RETRIES + 1):
+        try:
+            text = gemini_call(prompt)
+            parsed = parse_json_response(text)
+            result: dict[str, bool] = {}
+            for e in parsed if isinstance(parsed, list) else []:
+                if not isinstance(e, dict):
+                    continue
+                ind = (e.get("indication") or "").strip().lower()
+                if ind:
+                    result[ind] = bool(e.get("valid", True))
+            if result:
+                return result
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            logger.warning(
+                "[IND_MAPPING] Match validation attempt %d/%d failed: %s",
+                attempt, _VALIDATE_MAX_RETRIES, exc,
+            )
+            if attempt < _VALIDATE_MAX_RETRIES:
+                time.sleep(2)
+
+    # Fail CLOSED: on error, reject all matches in this batch rather than
+    # silently accepting potentially wrong mappings. A null mapping is
+    # preferable to a confidently wrong one — the indication simply won't
+    # get an association_score and can be re-attempted later.
+    logger.warning(
+        "[IND_MAPPING] Match validation failed after %d attempts (last error: %s) "
+        "— REJECTING all %d match(es) in this batch (fail-closed)",
+        _VALIDATE_MAX_RETRIES, last_exc, len(pairs),
+    )
+    return {ind.lower(): False for ind, _ in pairs}
 
 
 def revalidate_existing_mappings(drug_name: str, secondary_only: bool = False) -> dict:
@@ -920,16 +1352,18 @@ def run_indication_mapping(
        already-resolved indication (e.g. "Prediabetes" vs. "Pre-diabetes")
        reuse the existing mapping instead of being re-resolved from scratch.
     3. Normalize and deduplicate new indications by spelling.
-    4. Cluster the normalized representatives semantically (Gemini), so
-       synonyms that don't share spelling (e.g. NAFLD vs. MASLD) resolve
-       to one canonical indication instead of several duplicates.
+    4. Cluster the normalized representatives semantically (Gemini), with
+       cross-chunk reconciliation to merge synonyms split across chunks.
     5. Resolve each canonical cluster via Path A (Gemini + OT disease list)
-       if targets given, then Path B (OT text search, seeded with the
-       LLM-suggested OT name when available) for any remaining.
-    6. Validate every resolved mapping with a dedicated Gemini QC pass,
-       nulling out matches that are word-overlap false positives rather
-       than genuine clinical matches.
-    7. Push new mappings to ``OT_DISEASE_TABLE``.
+       if targets given, then Path B (OT text search with retry, seeded with
+       the LLM-suggested OT name when available) for any remaining, then
+       Path C (Gemini + Google Search grounding, with OT API verification
+       to reject hallucinated IDs) for anything still unresolved.
+    6. Validate every resolved mapping with a dedicated Gemini QC pass
+       (fail-closed: API errors reject the batch rather than accepting),
+       nulling out matches that are word-overlap false positives.
+    7. Push new mappings to ``OT_DISEASE_TABLE`` with ``resolution_path``
+       tracking which path resolved each mapping.
     8. Return all resolved mappings (existing + new).
 
     Args:
@@ -938,7 +1372,8 @@ def run_indication_mapping(
             (enables Path A Gemini matching). Pass ``None`` to skip Path A.
 
     Returns:
-        List of dicts with keys ``indication``, ``ot_disease``, ``ot_disease_id``.
+        List of dicts with keys ``indication``, ``ot_disease``,
+        ``ot_disease_id``, ``resolution_path``.
     """
     logger.info("[IND_MAPPING] Starting indication mapping for '%s'", drug_name)
 
@@ -998,6 +1433,7 @@ def run_indication_mapping(
                 "indication": ind,
                 "ot_disease": _existing_lookup(ind).get("ot_disease"),
                 "ot_disease_id": _existing_lookup(ind).get("ot_disease_id"),
+                "resolution_path": _existing_lookup(ind).get("resolution_path", "existing"),
             }
             for ind in indications
         ]
@@ -1014,8 +1450,7 @@ def run_indication_mapping(
 
     # Step 4: Semantic clustering — groups synonyms that don't share
     # spelling (e.g. "Visceral Adipose Tissue (VAT)" / "Visceral fat")
-    # onto one canonical name, seeded with each rep's LLM-suggested OT
-    # name hint where available.
+    # onto one canonical name, with cross-chunk reconciliation.
     cluster_map = cluster_indications(unique_reps, llm_ot_name_map) if len(unique_reps) > 1 else {r: r for r in unique_reps}
     canonical_reps = sorted(set(cluster_map.values()))
     logger.info(
@@ -1034,7 +1469,9 @@ def run_indication_mapping(
     # Step 5a: Path A — Gemini semantic matching (against the target's own
     # OT disease list — generally reliable, run on canonical clusters)
     gemini_unresolved = list(canonical_reps)
+    # Track resolution path: {indication: (did, name, path_label)}
     resolved_map: dict[str, tuple[str | None, str | None]] = {}
+    resolution_paths: dict[str, str] = {}  # indication -> "path_a" / "path_b" / "path_c"
 
     if target_ensembl_ids:
         logger.info("[IND_MAPPING] Path A: Fetching OT diseases for %d target(s)", len(target_ensembl_ids))
@@ -1046,6 +1483,7 @@ def run_indication_mapping(
                 did, name = gemini_results.get(ind, (None, None))
                 if did:
                     resolved_map[ind] = (did, name)
+                    resolution_paths[ind] = "path_a"
                 else:
                     gemini_unresolved.append(ind)
             if gemini_unresolved:
@@ -1056,8 +1494,8 @@ def run_indication_mapping(
     else:
         logger.info("[IND_MAPPING] Path A skipped (no target_ensembl_ids provided)")
 
-    # Step 5b: Path B — OT text search, seeded with the LLM-suggested OT
-    # name hint (searched first) when one is available for this cluster.
+    # Step 5b: Path B — OT text search with retry, seeded with the
+    # LLM-suggested OT name hint (searched first) when available.
     if gemini_unresolved:
         logger.info("[IND_MAPPING] Path B: OT text search for %d indication(s)", len(gemini_unresolved))
 
@@ -1077,11 +1515,11 @@ def run_indication_mapping(
             for fut in as_completed(futures):
                 ind, did, name = fut.result()
                 resolved_map[ind] = (did, name)
+                if did:
+                    resolution_paths[ind] = "path_b"
 
-    # Step 5c: Path C — Gemini + Google Search grounding for anything
-    # Path A and Path B both failed to resolve. This is the most
-    # expensive path (one search-grounded Gemini call per batch), but
-    # it can find OT disease names the text search API misses entirely.
+    # Step 5c: Path C — Gemini + Google Search grounding with OT API
+    # verification for anything Path A and Path B both failed to resolve.
     still_unresolved = [
         ind for ind in canonical_reps
         if not resolved_map.get(ind, (None, None))[0]
@@ -1091,19 +1529,23 @@ def run_indication_mapping(
         for ind, (did, name) in path_c_results.items():
             if did and name:
                 resolved_map[ind] = (did, name)
+                resolution_paths[ind] = "path_c"
 
     # Step 6: Validate every resolved mapping (Path A, B, and C alike) —
     # rejects word-overlap false positives (e.g. "renal impairment" ->
     # "renal carcinoma") rather than storing a confidently wrong match.
+    # Now fail-CLOSED: API errors reject the batch rather than accepting.
     resolved_map = validate_resolved_mappings(resolved_map)
 
     # Map canonical cluster results back to every raw variant that fed it
     final_resolved: dict[str, tuple[str | None, str | None]] = {}
+    final_paths: dict[str, str] = {}
     for raw in new_indications:
         nk = raw_to_norm[raw]
         rep = norm_to_raw[nk]
         canonical = cluster_map.get(rep, rep)
         final_resolved[raw] = resolved_map.get(canonical, (None, None))
+        final_paths[raw] = resolution_paths.get(canonical, "unresolved")
 
     # Step 7: Push new mappings to BQ (one row per raw indication text,
     # even though several raw variants may share the same resolved result)
@@ -1117,6 +1559,7 @@ def run_indication_mapping(
                 "indication": raw,
                 "ot_disease": name,
                 "ot_disease_id": did,
+                "resolution_path": final_paths.get(raw, "unresolved"),
             })
     push_mappings(OT_DISEASE_TABLE, OT_DISEASE_SCHEMA, new_rows)
 
@@ -1129,12 +1572,23 @@ def run_indication_mapping(
                 "indication": ind,
                 "ot_disease": existing_entry.get("ot_disease"),
                 "ot_disease_id": existing_entry.get("ot_disease_id"),
+                "resolution_path": existing_entry.get("resolution_path", "existing"),
             })
         elif ind in final_resolved:
             did, name = final_resolved[ind]
-            all_mappings.append({"indication": ind, "ot_disease": name, "ot_disease_id": did})
+            all_mappings.append({
+                "indication": ind,
+                "ot_disease": name,
+                "ot_disease_id": did,
+                "resolution_path": final_paths.get(ind, "unresolved"),
+            })
         else:
-            all_mappings.append({"indication": ind, "ot_disease": None, "ot_disease_id": None})
+            all_mappings.append({
+                "indication": ind,
+                "ot_disease": None,
+                "ot_disease_id": None,
+                "resolution_path": "unresolved",
+            })
 
     logger.info("[IND_MAPPING] Completed. %d mapping(s) for '%s'", len(all_mappings), drug_name)
     return all_mappings
