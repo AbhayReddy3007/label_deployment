@@ -1,116 +1,121 @@
-[INFO] [IND_MAPPING] Gemini: 'Advanced Solid Tumors' → MONDO_0004992 (cancer)
-[INFO] [IND_MAPPING] Gemini: 'Advanced Solid Tumors' → MONDO_0004992 (cancer)
-[INFO] [IND_MAPPING] Gemini: 'Dyslipidemia' → MONDO_0021187 (hyperlipidemia)
-[INFO] [IND_MAPPING] Gemini: 'Early-Stage Breast Cancer' → MONDO_0007254 (breast cancer)
-[INFO] [IND_MAPPING] Gemini: 'End-Stage Renal Disease' → MONDO_0005300 (chronic kidney disease)
-[INFO] [IND_MAPPING] Gemini: 'End-stage liver disease' → MONDO_0005155 (cirrhosis of liver)
-[INFO] [IND_MAPPING] Gemini: 'Endometrial Cancer' → MONDO_0011962 (endometrial cancer)
-[INFO] [IND_MAPPING] Gemini: 'Endometrial Hyperplasia' → MONDO_0006096 (atypical endometrial hyperplasia)
-[INFO] [IND_MAPPING] Gemini: 'Heart Failure' → MONDO_0005252 (heart failure)
-[INFO] [IND_MAPPING] Gemini: 'Heart failure with preserved ejection fraction' → MONDO_0006727 (diastolic heart failure)
-[INFO] [IND_MAPPING] Gemini: 'Hypertension' → HP_0000822 (Hypertension)
-[INFO] [IND_MAPPING] Gemini: 'Hypothalamic Obesity' → HP_0001513 (Obesity)
-[INFO] [IND_MAPPING] Gemini: 'Idiopathic intracranial hypertension' → MONDO_0009468 (pseudotumor cerebri)
-[INFO] [IND_MAPPING] Gemini: 'Inflammatory Bowel Disease' → MONDO_0005265 (inflammatory bowel disease)
-[INFO] [IND_MAPPING] Gemini: 'Liver cirrhosis' → MONDO_0005155 (cirrhosis of liver)
-[INFO] [IND_MAPPING] Gemini: 'Malignant Solid Neoplasm' → MONDO_0005070 (neoplasm)
-[INFO] [IND_MAPPING] Gemini: 'Metabolic Dysfunction-Associated Steatohepatitis' → MONDO_0007027 (metabolic dysfunction-associated steatohepatitis)
-[INFO] [IND_MAPPING] Gemini: 'Metabolic Syndrome' → EFO_0000195 (metabolic syndrome)
-[INFO] [IND_MAPPING] Gemini: 'Metabolic dysfunction-associated steatotic liver disease' → MONDO_0013209 (metabolic dysfunction-associated steatotic liver disease)
-[INFO] [IND_MAPPING] Gemini: 'Myocardial infarction' → MONDO_0005068 (myocardial infarction)
-[INFO] [IND_MAPPING] Gemini: 'Nonalcoholic Fatty Liver Disease (NAFLD)' → MONDO_0013209 (metabolic dysfunction-associated steatotic liver disease)
-[INFO] [IND_MAPPING] Gemini: 'Obstructive sleep apnea' → MONDO_0007147 (obstructive sleep apnea syndrome)
-[INFO] [IND_MAPPING] Gemini: 'Opioid Use Disorder' → EFO_0010702 (opioid use disorder)
-[INFO] [IND_MAPPING] Gemini: 'Pediatric Obesity' → HP_0001513 (Obesity)
-[INFO] [IND_MAPPING] Gemini: 'Pediatric Obesity' → HP_0001513 (Obesity)
-[INFO] [IND_MAPPING] Gemini: 'Breast Cancer' → MONDO_0004989 (breast carcinoma)
-[INFO] [IND_MAPPING] Gemini: 'Cognitive Impairment' → HP_0100543 (Cognitive impairment)
-[INFO] [IND_MAPPING] Gemini: 'Compensated Cirrhosis' → HP_0001394 (Cirrhosis)
-[INFO] [IND_MAPPING] Gemini: 'Coronary Atherosclerosis' → MONDO_0005311 (atherosclerosis)
-[INFO] [IND_MAPPING] Gemini: 'Hirsutism' → EFO_0009006 (hyperandrogenism)
-[INFO] [IND_MAPPING] Gemini: 'Hyperandrogenism' → EFO_0009006 (hyperandrogenism)
-[INFO] [IND_MAPPING] Gemini: 'Renal Impairment' → MONDO_0005240 (kidney disorder)
-[INFO] [IND_MAPPING] Gemini: 'Sarcopenia' → EFO_1000653 (sarcopenia)
-[INFO] [IND_MAPPING] Gemini: 'Doença Hepática Gordurosa Não Alcoólica' → EFO_0008527 (steatosis)
-[INFO] [IND_MAPPING] Gemini: 'HIV Infections' → EFO_0000544 (infection)
-[INFO] [IND_MAPPING] Gemini: 'Cardiovascular Diseases' → MONDO_0005267 (heart disorder)
-[INFO] [IND_MAPPING] Gemini: 'Cardiovascular disease' → MONDO_0005267 (heart disorder)
-[INFO] [IND_MAPPING] Gemini: 'Chronic Kidney Disease' → HP_0000112 (Nephropathy)
-[INFO] [IND_MAPPING] Gemini: 'Dumping Syndrome' → MONDO_0001979 (dumping syndrome)
-[INFO] [IND_MAPPING] Gemini: 'Chronic High Bowel Frequency' → MONDO_0044751 (chronic diarrheal disease)
-[INFO] [IND_MAPPING] Gemini: 'Craniopharyngioma' → MONDO_0002714 (central nervous system cancer)
-[INFO] [IND_MAPPING] Gemini: 'Chronic High Bowel Frequency' → MONDO_0044751 (chronic diarrheal disease)
-[INFO] [IND_MAPPING] Gemini: 'Craniopharyngioma' → MONDO_0002714 (central nervous system cancer)
-[INFO] [IND_MAPPING] Gemini: 'Stroke' → MONDO_0002679 (cerebral infarction)
-[INFO] [IND_MAPPING] Gemini: 'Cancer' → MONDO_0004993 (carcinoma)
-[INFO] [IND_MAPPING] Gemini: 'Cancer' → MONDO_0004993 (carcinoma)
-[INFO] [IND_MAPPING] Gemini: 'Cocaine Use Disorder' → MONDO_0004938 (substance dependence)
-[INFO] [IND_MAPPING] Gemini: 'Cocaine Use Disorder' → MONDO_0004938 (substance dependence)
-[INFO] [IND_MAPPING] Gemini: 'Methamphetamine Use Disorder' → MONDO_0004938 (substance dependence)
-[INFO] [IND_MAPPING] Gemini: 'Cocaine Use Disorder' → MONDO_0004938 (substance dependence)
-[INFO] [IND_MAPPING] Gemini: 'Methamphetamine Use Disorder' → MONDO_0004938 (substance dependence)
-[INFO] [IND_MAPPING] Gemini: 'Methamphetamine Use Disorder' → MONDO_0004938 (substance dependence)
-[INFO] [IND_MAPPING] Gemini: 'Facial Aging' → EFO_0005422 (skin aging)
-[INFO] [IND_MAPPING] Gemini: 'Stimulant Use Disorder' → MONDO_0004456 (cocaine abuse)
-[INFO] [IND_MAPPING] Gemini: 'Fecal Incontinence' → EFO_0009523 (fecal incontinence)
-[INFO] [IND_MAPPING] Gemini: 'Fecal Incontinence' → EFO_0009523 (fecal incontinence)
-[INFO] [IND_MAPPING] Gemini: 'Dry Eye Disease' → HP_0001097 (Keratoconjunctivitis sicca)
-[INFO] [IND_MAPPING] Gemini: 'Dry Eye Disease' → HP_0001097 (Keratoconjunctivitis sicca)
-[INFO] [IND_MAPPING] Gemini: 'Dry Eye Disease' → HP_0001097 (Keratoconjunctivitis sicca)
-[INFO] [IND_MAPPING] 11 indication(s) unmatched by Gemini — falling back to OT text search
-[INFO] [IND_MAPPING] Path B: OT text search for 11 indication(s)
-[INFO] [IND_MAPPING] OT search: 'Alcohol Use Disorder' → HP_0030955 (Addictive alcohol use)
-[INFO] [IND_MAPPING] OT search: 'Facial Skin Laxity' → HP_0009762 (Facial wrinkling)
-[INFO] [IND_MAPPING] OT search: 'Polycystic Ovary Syndrome' → MONDO_0008487 (polycystic ovary syndrome)
-[INFO] [IND_MAPPING] OT search: 'Prader-Willi Syndrome' → MONDO_0008300 (Prader-Willi syndrome)
-[INFO] [IND_MAPPING] OT search: 'Antipsychotic-induced weight gain' → GO_0097332 (response to antipsychotic drug)
+ [IND_MAPPING] Starting indication mapping for 'Tirzepatide'
+[INFO] [IND_MAPPING] Fetched 87 Secondary indication(s) for 'Tirzepatide' from glp_indications_table
+[INFO] [IND_MAPPING] 87 indication(s) total, 0 already resolved (non-null), 87 to resolve (new + previously null)
+[INFO] [IND_MAPPING] Clustering 59 indication(s) in 1 chunk(s) of up to 60
+[INFO] [IND_MAPPING] Clustering collapsed 59 indication(s) into 58 canonical cluster(s)
+[INFO] [IND_MAPPING] Path A: Fetching OT diseases for 3 target(s)
+[INFO] [IND_MAPPING] Target ENSG00000112164: 1187 associated diseases in OT
+[INFO] [IND_MAPPING] Target ENSG00000010310: 298 associated diseases in OT
+[INFO] [IND_MAPPING] Target ENSG00000112164: 1187 associated diseases in OT
+[INFO] [IND_MAPPING] Fetched 1014 unique diseases across 3 target(s)
+[INFO] [IND_MAPPING] Gemini matching: 58 indication(s) × 1014 diseases → 11 disease chunk(s), indication batches of 15
+[INFO] [IND_MAPPING] Gemini best: 'Advanced Solid Tumors' → MONDO_0004992 (cancer) [score=149.0]
+[INFO] [IND_MAPPING] Gemini best: 'Alcohol Use Disorder' → MONDO_0007079 (alcohol dependence) [score=155.0]
+[INFO] [IND_MAPPING] Gemini best: 'Breast Cancer' → MONDO_0004989 (breast carcinoma) [score=157.0]
+[INFO] [IND_MAPPING] Gemini best: 'Cancer' → MONDO_0002108 (thyroid cancer) [score=149.0]
+[INFO] [IND_MAPPING] Gemini best: 'Cognitive Impairment' → EFO_0001072 (memory impairment) [score=149.0]
+[INFO] [IND_MAPPING] Gemini best: 'Doença Hepática Gordurosa Não Alcoólica' → EFO_0008527 (steatosis) [score=147.0]
+[INFO] [IND_MAPPING] Gemini best: 'Dumping Syndrome' → MONDO_0001979 (dumping syndrome) [score=360.0]
+[INFO] [IND_MAPPING] Gemini best: 'Dyslipidemia' → MONDO_0021187 (hyperlipidemia) [score=147.0]
+[INFO] [IND_MAPPING] Gemini best: 'Early-Stage Breast Cancer' → MONDO_0007254 (breast cancer) [score=160.0]
+[INFO] [IND_MAPPING] Gemini best: 'End-Stage Renal Disease' → MONDO_0024327 (chronic renal failure syndrome) [score=155.0]
+[INFO] [IND_MAPPING] Gemini best: 'End-stage liver disease' → MONDO_0005155 (cirrhosis of liver) [score=155.0]
+[INFO] [IND_MAPPING] Gemini best: 'Endometrial Cancer' → MONDO_0011962 (endometrial cancer) [score=360.0]
+[INFO] [IND_MAPPING] Gemini best: 'Endometrial Hyperplasia' → MONDO_0006096 (atypical endometrial hyperplasia) [score=163.0]
+[INFO] [IND_MAPPING] Gemini best: 'Facial Aging' → EFO_0022597 (aging) [score=158.0]
+[INFO] [IND_MAPPING] Gemini best: 'Fecal Incontinence' → EFO_0009523 (fecal incontinence) [score=366.0]
+[INFO] [IND_MAPPING] Gemini best: 'HIV Infections' → MONDO_0005550 (infectious disease) [score=146.0]
+[INFO] [IND_MAPPING] Gemini best: 'Heart Failure' → MONDO_0005252 (heart failure) [score=360.0]
+[INFO] [IND_MAPPING] Gemini best: 'Heart failure with preserved ejection fraction' → MONDO_0006727 (diastolic heart failure) [score=157.0]
+[INFO] [IND_MAPPING] Gemini best: 'Hyperandrogenism' → EFO_0009006 (hyperandrogenism) [score=358.0]
+[INFO] [IND_MAPPING] Gemini best: 'Hypertension' → MONDO_0001134 (essential hypertension) [score=155.0]
+[INFO] [IND_MAPPING] Gemini best: 'Idiopathic intracranial hypertension' → MONDO_0006810 (intracranial hypertension) [score=166.0]
+[INFO] [IND_MAPPING] Gemini best: 'Inflammatory Bowel Disease' → MONDO_0005265 (inflammatory bowel disease) [score=368.0]
+[INFO] [IND_MAPPING] Gemini best: 'Liver cirrhosis' → MONDO_0005155 (cirrhosis of liver) [score=166.0]
+[INFO] [IND_MAPPING] Gemini best: 'Malignant Solid Neoplasm' → MONDO_0004992 (cancer) [score=149.0]
+[INFO] [IND_MAPPING] Gemini best: 'Metabolic Dysfunction-Associated Steatohepatitis (MASH)' → MONDO_0007027 (metabolic dysfunction-associated steatohepatitis) [score=176.0]
+[INFO] [IND_MAPPING] Gemini best: 'Metabolic Syndrome' → EFO_0000195 (metabolic syndrome) [score=360.0]
+[INFO] [IND_MAPPING] Gemini best: 'Metabolic dysfunction-associated steatotic liver disease' → MONDO_0013209 (metabolic dysfunction-associated steatotic liver disease) [score=386.0]
+[INFO] [IND_MAPPING] Gemini best: 'Myocardial infarction' → MONDO_0005068 (myocardial infarction) [score=366.0]
+[INFO] [IND_MAPPING] Gemini best: 'Nonalcoholic Fatty Liver Disease (NAFLD)' → MONDO_0013209 (metabolic dysfunction-associated steatotic liver disease) [score=150.0]
+[INFO] [IND_MAPPING] Gemini best: 'Obstructive sleep apnea' → MONDO_0007147 (obstructive sleep apnea syndrome) [score=173.0]
+[INFO] [IND_MAPPING] Gemini best: 'Opioid Use Disorder' → EFO_0010702 (opioid use disorder) [score=368.0]
+[INFO] [IND_MAPPING] Gemini best: 'Pediatric Obesity' → MONDO_0011122 (obesity disorder) [score=157.0]
+[INFO] [IND_MAPPING] Gemini best: 'Polycystic Ovary Syndrome' → MONDO_0008487 (polycystic ovary syndrome) [score=368.0]
+[INFO] [IND_MAPPING] Gemini best: 'Prader-Willi Syndrome' → MONDO_0008300 (Prader-Willi syndrome) [score=368.0]
+[INFO] [IND_MAPPING] Gemini best: 'Pre-diabetes' → MONDO_0006920 (prediabetes syndrome) [score=146.0]
+[INFO] [IND_MAPPING] Gemini best: 'Renal Impairment' → MONDO_0024327 (chronic renal failure syndrome) [score=155.0]
+[INFO] [IND_MAPPING] Gemini best: 'Sarcopenia' → EFO_1000653 (sarcopenia) [score=358.0]
+[INFO] [IND_MAPPING] Gemini best: 'Schizophrenia-spectrum disorders' → MONDO_0002025 (psychiatric disorder) [score=146.0]
+[INFO] [IND_MAPPING] Gemini best: 'Stimulant Use Disorder' → MONDO_0002025 (psychiatric disorder) [score=149.0]
+[INFO] [IND_MAPPING] Gemini best: 'Stroke' → EFO_1001504 (small vessel stroke) [score=152.0]
+[INFO] [IND_MAPPING] Gemini matched 40/58 indication(s) across 11 disease chunk(s)
+[INFO] [IND_MAPPING] 18 indication(s) unmatched by Gemini — falling back to OT text search
+[INFO] [IND_MAPPING] Path B: OT text search for 18 indication(s)
+[INFO] [IND_MAPPING] OT search: 'Cardiovascular disease' → MONDO_0004995 (cardiovascular disorder)
+[INFO] [IND_MAPPING] OT search: 'Cardiovascular Diseases' → MONDO_0004995 (cardiovascular disorder)
+[INFO] [IND_MAPPING] OT search: 'Chronic Kidney Disease' → MONDO_0005300 (chronic kidney disease)
+[INFO] [IND_MAPPING] OT search: 'Cocaine Use Disorder' → EFO_0010445 (cocaine use disorder)
+[INFO] [IND_MAPPING] OT search: 'Antipsychotic-induced weight gain' → EFO_0004567 (antipsychotic drug related weight gain)
+[INFO] [IND_MAPPING] OT search: 'Coronary Atherosclerosis' → MONDO_0021661 (coronary atherosclerosis)
+[INFO] [IND_MAPPING] OT search: 'Compensated Cirrhosis' → MONDO_0005155 (cirrhosis of liver)
+[INFO] [IND_MAPPING] OT search: 'Craniopharyngioma' → MONDO_0018907 (craniopharyngioma)
+[INFO] [IND_MAPPING] OT search: 'Chronic High Bowel Frequency' → MONDO_0044889 (high grade B-cell lymphoma)
+[INFO] [IND_MAPPING] OT search: 'Facial Skin Laxity' → MONDO_0001835 (facial paralysis)
+[INFO] [IND_MAPPING] OT search: 'Dry Eye Disease' → MONDO_0006733 (dry eye syndrome)
+[INFO] [IND_MAPPING] OT search: 'Hirsutism' → MONDO_0013301 (aromatase deficiency)
+[INFO] [IND_MAPPING] OT search: 'Hypothalamic Obesity' → MONDO_0006799 (hypothalamic neoplasm)
 [INFO] [IND_MAPPING] OT search: 'Prediabetic State' → MONDO_0006920 (prediabetes syndrome)
-[WARNING] [IND_MAPPING] Could not resolve 'Sarcopenic Obesity'
-[INFO] [IND_MAPPING] OT search: 'Pre-diabetes' → MONDO_0015967 (monogenic diabetes)
+[INFO] [IND_MAPPING] OT search: 'Methamphetamine Use Disorder' → MONDO_0005419 (methamphetamine dependence)
 [INFO] [IND_MAPPING] OT search: 'Type 1 Diabetes Mellitus' → MONDO_0005147 (type 1 diabetes mellitus)
+[WARNING] [IND_MAPPING] Could not resolve 'Sarcopenic Obesity'
 [INFO] [IND_MAPPING] OT search: 'Type 1 Diabetes' → MONDO_0005147 (type 1 diabetes mellitus)
-[INFO] [IND_MAPPING] OT search: 'Schizophrenia-spectrum disorders' → MONDO_0005090 (schizophrenia)
 [INFO] [IND_MAPPING] Path C: Gemini + Google Search grounding for 1 unresolved indication(s)
 [INFO] AFC is enabled with max remote calls: 10.
 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
 [INFO] [IND_MAPPING] Path C resolved 0/1 indication(s) via search grounding (0 hallucinated ID(s) rejected)
 [INFO] [IND_MAPPING] Validating 57 resolved mapping(s)
 [WARNING] [IND_MAPPING] Rejected over-specific match: 'Endometrial Hyperplasia' -> 'atypical endometrial hyperplasia' (MONDO_0006096)
+[WARNING] [IND_MAPPING] Rejected over-specific match: 'Hypertension' -> 'essential hypertension' (MONDO_0001134)
 [WARNING] [IND_MAPPING] Rejected over-specific match: 'Obstructive sleep apnea' -> 'obstructive sleep apnea syndrome' (MONDO_0007147)
 [WARNING] [IND_MAPPING] Rejected over-specific match: 'Type 1 Diabetes' -> 'type 1 diabetes mellitus' (MONDO_0005147)
-[INFO] [IND_MAPPING] Over-specificity check rejected 3/57 mapping(s)
-[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Cancer' -> 'carcinoma' (MONDO_0004993)
-[WARNING] [IND_MAPPING] Rejected low-confidence match: 'HIV Infections' -> 'infection' (EFO_0000544)
-[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Hirsutism' -> 'hyperandrogenism' (EFO_0009006)
-[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Methamphetamine Use Disorder' -> 'substance dependence' (MONDO_0004938)
-[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Facial Skin Laxity' -> 'Facial wrinkling' (HP_0009762)
-[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Antipsychotic-induced weight gain' -> 'response to antipsychotic drug' (GO_0097332)
-[INFO] [IND_MAPPING] Validation rejected 9/57 resolved mapping(s) (3 over-specific, 6 false-positive)
-[INFO] [IND_MAPPING] 9 mapping(s) rejected by validation — attempting re-resolution
-[INFO] [IND_MAPPING] Re-resolution fallback: attempting 9 rejected indication(s)
-[INFO] [IND_MAPPING] Re-resolve Path B: 'Cancer' → MONDO_0004992 (cancer)
+[INFO] [IND_MAPPING] Over-specificity check rejected 4/57 mapping(s)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Pre-diabetes' -> 'prediabetes syndrome' (MONDO_0006920)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Renal Impairment' -> 'chronic renal failure syndrome' (MONDO_0024327)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Chronic High Bowel Frequency' -> 'high grade B-cell lymphoma' (MONDO_0044889)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Facial Skin Laxity' -> 'facial paralysis' (MONDO_0001835)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Hirsutism' -> 'aromatase deficiency' (MONDO_0013301)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Hypothalamic Obesity' -> 'hypothalamic neoplasm' (MONDO_0006799)
+[INFO] [IND_MAPPING] Validation rejected 10/57 resolved mapping(s) (4 over-specific, 6 false-positive)
+[INFO] [IND_MAPPING] 10 mapping(s) rejected by validation — attempting re-resolution
+[INFO] [IND_MAPPING] Re-resolution fallback: attempting 10 rejected indication(s)
 [WARNING] [IND_MAPPING] Re-resolve Path B: over-specific match for 'Endometrial Hyperplasia' → 'atypical endometrial hyperplasia' — skipping
-[INFO] [IND_MAPPING] Re-resolve Path B: 'Antipsychotic-induced weight gain' → GO_0097332 (response to antipsychotic drug)
-[INFO] [IND_MAPPING] Re-resolve Path B: 'Facial Skin Laxity' → HP_0009762 (Facial wrinkling)
-[INFO] [IND_MAPPING] Re-resolve Path B: 'HIV Infections' → EFO_0000180 (HIV-1 infection)
-[INFO] [IND_MAPPING] Re-resolve Path B: 'Hirsutism' → HP_0001007 (Hirsutism)
-[INFO] [IND_MAPPING] Re-resolve Path B: 'Methamphetamine Use Disorder' → MONDO_0005419 (methamphetamine dependence)
-[WARNING] [IND_MAPPING] Re-resolve Path B: over-specific match for 'Type 1 Diabetes' → 'type 1 diabetes mellitus' — skipping
+[INFO] [IND_MAPPING] Re-resolve Path B: 'Facial Skin Laxity' → MONDO_0001835 (facial paralysis)
+[INFO] [IND_MAPPING] Re-resolve Path B: 'Chronic High Bowel Frequency' → MONDO_0044889 (high grade B-cell lymphoma)
+[INFO] [IND_MAPPING] Re-resolve Path B: 'Hirsutism' → MONDO_0013301 (aromatase deficiency)
+[WARNING] [IND_MAPPING] Re-resolve Path B: over-specific match for 'Hypertension' → 'malignant hypertension' — skipping
+[INFO] [IND_MAPPING] Re-resolve Path B: 'Hypothalamic Obesity' → MONDO_0006799 (hypothalamic neoplasm)
 [WARNING] [IND_MAPPING] Re-resolve Path B: over-specific match for 'Obstructive sleep apnea' → 'obstructive sleep apnea syndrome' — skipping
-[INFO] [IND_MAPPING] Re-resolve Path C for 3 still-unresolved indication(s)
-[INFO] [IND_MAPPING] Path C: Gemini + Google Search grounding for 3 unresolved indication(s)
+[INFO] [IND_MAPPING] Re-resolve Path B: 'Pre-diabetes' → MONDO_0015967 (monogenic diabetes)
+[INFO] [IND_MAPPING] Re-resolve Path B: 'Renal Impairment' → MONDO_0005206 (renal carcinoma)
+[WARNING] [IND_MAPPING] Re-resolve Path B: over-specific match for 'Type 1 Diabetes' → 'type 1 diabetes mellitus' — skipping
+[INFO] [IND_MAPPING] Re-resolve Path C for 4 still-unresolved indication(s)
+[INFO] [IND_MAPPING] Path C: Gemini + Google Search grounding for 4 unresolved indication(s)
 [INFO] AFC is enabled with max remote calls: 10.
 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
 [WARNING] [IND_MAPPING] Path C: rejected hallucinated ID 'EFO_0000464' for 'Endometrial Hyperplasia'
-[WARNING] [IND_MAPPING] Path C: rejected hallucinated ID 'MONDO_0008444' for 'Obstructive sleep apnea'
-[INFO] [IND_MAPPING] Path C resolved 1/3 indication(s) via search grounding (2 hallucinated ID(s) rejected)
+[WARNING] [IND_MAPPING] Path C: rejected hallucinated ID 'EFO_0000537' for 'Hypertension'
+[WARNING] [IND_MAPPING] Path C: rejected hallucinated ID 'EFO_0004154' for 'Obstructive sleep apnea'
+[INFO] [IND_MAPPING] Path C resolved 1/4 indication(s) via search grounding (3 hallucinated ID(s) rejected)
 [WARNING] [IND_MAPPING] Re-resolve Path C: over-specific match for 'Type 1 Diabetes' → 'type 1 diabetes mellitus' — skipping
-[INFO] [IND_MAPPING] Re-resolution fallback: recovered 6/9 rejected indication(s)
+[INFO] [IND_MAPPING] Re-resolution fallback: recovered 6/10 rejected indication(s)
 [INFO] [IND_MAPPING] Validating 6 resolved mapping(s)
-[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Antipsychotic-induced weight gain' -> 'response to antipsychotic drug' (GO_0097332)
-[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Facial Skin Laxity' -> 'Facial wrinkling' (HP_0009762)
-[INFO] [IND_MAPPING] Validation rejected 2/6 resolved mapping(s) (0 over-specific, 2 false-positive)
-[INFO] [IND_MAPPING] Re-resolution recovered 4/9 rejected mapping(s)
-[INFO] [IND_MAPPING] Skipping 7 unresolved mapping(s) — only pushing 63 verified match(es) to BQ
-[INFO] [OT_UTILS] Upserted 63 mapping(s) into cognito-dev-380506.data_mart.ot_disease_mapping
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Facial Skin Laxity' -> 'facial paralysis' (MONDO_0001835)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Chronic High Bowel Frequency' -> 'high grade B-cell lymphoma' (MONDO_0044889)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Pre-diabetes' -> 'monogenic diabetes' (MONDO_0015967)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Renal Impairment' -> 'renal carcinoma' (MONDO_0005206)
+[INFO] [IND_MAPPING] Validation rejected 4/6 resolved mapping(s) (0 over-specific, 4 false-positive)
+[INFO] [IND_MAPPING] Re-resolution recovered 2/10 rejected mapping(s)
+[INFO] [IND_MAPPING] Skipping 11 unresolved mapping(s) — only pushing 59 verified match(es) to BQ
+[INFO] [OT_UTILS] Upserted 59 mapping(s) into cognito-dev-380506.data_mart.ot_disease_mapping
 [INFO] [IND_MAPPING] Completed. 87 mapping(s) for 'Tirzepatide'
