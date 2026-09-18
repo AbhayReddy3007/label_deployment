@@ -1,55 +1,90 @@
-indication	ot_disease_name	association_score
-Hypertension	Hypertension	0.48322106652420371
-Stroke	Stroke	0.27231001597752091
-Cardiovascular Diseases	cardiovascular disorder	0.37912793454771337
-Coronary Atherosclerosis	coronary atherosclerosis	0.32781980369931391
-Heart Failure with Preserved Ejection Fraction	heart failure	0.2713709506655122
-Myocardial Infarction	myocardial infarction	0.38608734884921031
-Dyslipidemia	syndromic dyslipidemia	
-Facial Skin Laxity	facial skin laxity	
-Facial Aging	skin aging	0.0051535857514366755
-Hirsutism	Hirsutism	0.0073915970936940375
-Pediatric Obesity	Obesity	0.63033339109535447
-Hyperandrogenism	hyperandrogenism	0.076043842410243284
-Hypothalamic Obesity	hypothalamic obesity	
-Polycystic Ovary Syndrome	polycystic ovary syndrome	0.41996570164509039
-Type 1 Diabetes Mellitus	type 1 diabetes mellitus	0.52432975525301062
-Chronic High Bowel Frequency	chronic high bowel frequency	
-Dumping Syndrome	dumping syndrome	0.028043066276799481
-Fecal Incontinence	fecal incontinence	0.00406537840153172
-Inflammatory Bowel Disease	inflammatory bowel disease	0.11460589731687622
-End-stage liver disease	End Stage Liver Disease	
-Liver cirrhosis	cirrhosis of liver	0.37240176266648917
-Non-alcoholic steatohepatitis (NASH)	metabolic dysfunction-associated steatohepatitis	0.413960709027386
-Metabolic Dysfunction-associated Steatotic Liver Disease (MASLD)	metabolic dysfunction-associated steatotic liver disease	0.534462206797635
-Non-alcoholic fatty liver disease	non-alcoholic fatty liver	0.011644091242880626
-HIV Infections	HIV-1 infection	
-Antipsychotic-induced weight gain	antipsychoticinduced weight gain	
-Hypothalamic Obesity	hypothalamic obesity	
-Metabolic Syndrome	metabolic syndrome	0.23142737522967127
-Prediabetes	prediabetes	
-Prediabetic State	prediabetes syndrome	0.385140881769619
-Sarcopenic Obesity	sarcopenic obesity	
-Type 1 Diabetes Mellitus	type 1 diabetes mellitus	0.52432975525301062
-Sarcopenia	sarcopenia	0.089171607441347472
-Renal Impairment	Renal insufficiency	0.014688361685153684
-Chronic Kidney Disease	chronic kidney disease	0.41589279141772173
-End-Stage Renal Disease	endstage renal disease	
-Cognitive Impairment	Cognitive impairment	0.087200872811659932
-Alcohol Use Disorder	alcohol use disorder	
-Cocaine Use Disorder	cocaine use disorder	0.1058225663828409
-Idiopathic intracranial hypertension	idiopathic intracranial hypertension	
-Methamphetamine Use Disorder	methamphetamine dependence	
-Opioid Use Disorder	opioid use disorder	0.10919876357584864
-Schizophrenia-spectrum disorders	schizophrenia	0.28480422959908358
-Advanced Solid Tumors	advanced solid tumors	
-Endometrial Hyperplasia	atypical endometrial hyperplasia	0.203268920076586
-Early-Stage Breast Cancer	breast carcinoma	0.34859649757451672
-Breast Cancer	breast neoplasm	0.0073710648795448858
-Cancer	cancer	0.11513202813725902
-Endometrial Cancer	endometrial cancer	0.12875707999966973
-Malignant Solid Neoplasm	malignant endocrine neoplasm	0.0044349582562164215
-Dry Eye Disease	dry eye syndrome	
-Prader-Willi Syndrome	Prader-Willi syndrome	0.27074486247768231
-Craniopharyngioma	craniopharyngioma	0.0085157358183600047
-Obstructive Sleep Apnea	obstructive sleep apnea syndrome	0.40548049407918313
+[INFO] [IND_MAPPING] Starting indication mapping for 'Tirzepatide'
+[INFO] [IND_MAPPING] Fetched 87 Secondary indication(s) for 'Tirzepatide' from glp_indications_table
+[INFO] [IND_MAPPING] 87 indication(s) total, 0 already resolved (non-null), 87 to resolve (new + previously null)
+[INFO] [IND_MAPPING] Clustering 59 indication(s) in 1 chunk(s) of up to 60
+[INFO] [IND_MAPPING] Clustering collapsed 59 indication(s) into 58 canonical cluster(s)
+[INFO] [IND_MAPPING] Path A: Fetching OT diseases for 3 target(s)
+[INFO] [IND_MAPPING] Target ENSG00000112164: 1187 associated diseases in OT
+[INFO] [IND_MAPPING] Target ENSG00000010310: 298 associated diseases in OT
+[INFO] [IND_MAPPING] Target ENSG00000112164: 1187 associated diseases in OT
+[INFO] [IND_MAPPING] Fetched 1181 unique diseases across 3 target(s)
+[INFO] [IND_MAPPING] Gemini matching: 58 indication(s) × 1181 diseases → 6 chunk(s)
+[INFO] [IND_MAPPING] Gemini: 'Advanced Solid Tumors' → MONDO_0004992 (cancer)
+[INFO] [IND_MAPPING] Gemini: 'Advanced Solid Tumors' → MONDO_0004992 (cancer)
+[INFO] [IND_MAPPING] Gemini: 'Breast Cancer' → MONDO_0021100 (breast neoplasm)
+[INFO] [IND_MAPPING] Gemini: 'Breast Cancer' → MONDO_0021100 (breast neoplasm)
+[INFO] [IND_MAPPING] 56 indication(s) unmatched by Gemini — falling back to OT text search
+[INFO] [IND_MAPPING] Path B: OT text search for 56 indication(s)
+[INFO] [IND_MAPPING] OT search: 'Cancer' → MONDO_0004992 (cancer)
+[INFO] [IND_MAPPING] OT search: 'Alcohol Use Disorder' → HP_0030955 (Addictive alcohol use)
+[INFO] [IND_MAPPING] OT search: 'Cardiovascular Diseases' → MONDO_0004995 (cardiovascular disorder)
+[INFO] [IND_MAPPING] OT search: 'Antipsychotic-induced weight gain' → GO_0097332 (response to antipsychotic drug)
+[INFO] [IND_MAPPING] OT search: 'Chronic Kidney Disease' → MONDO_0005300 (chronic kidney disease)
+[INFO] [IND_MAPPING] OT search: 'Cardiovascular disease' → MONDO_0004995 (cardiovascular disorder)
+[INFO] [IND_MAPPING] OT search: 'Cocaine Use Disorder' → EFO_0010445 (cocaine use disorder)
+[INFO] [IND_MAPPING] OT search: 'Cognitive Impairment' → HP_0100543 (Cognitive impairment)
+[INFO] [IND_MAPPING] OT search: 'Coronary Atherosclerosis' → MONDO_0021661 (coronary atherosclerosis)
+[INFO] [IND_MAPPING] OT search: 'Compensated Cirrhosis' → MONDO_0005155 (cirrhosis of liver)
+[INFO] [IND_MAPPING] OT search: 'Chronic High Bowel Frequency' → MONDO_0044889 (high grade B-cell lymphoma)
+[INFO] [IND_MAPPING] OT search: 'Craniopharyngioma' → MONDO_0018907 (craniopharyngioma)
+[INFO] [IND_MAPPING] OT search: 'Dumping Syndrome' → MONDO_0001979 (dumping syndrome)
+[INFO] [IND_MAPPING] OT search: 'Doença Hepática Gordurosa Não Alcoólica' → MONDO_0013209 (metabolic dysfunction-associated steatotic liver disease)
+[INFO] [IND_MAPPING] OT search: 'Dry Eye Disease' → MONDO_0006733 (dry eye syndrome)
+[INFO] [IND_MAPPING] OT search: 'Early-Stage Breast Cancer' → MONDO_0004989 (breast carcinoma)
+[INFO] [IND_MAPPING] OT search: 'End-Stage Renal Disease' → EFO_1001311 (End Stage Liver Disease)
+[INFO] [IND_MAPPING] OT search: 'Endometrial Cancer' → MONDO_0011962 (endometrial cancer)
+[INFO] [IND_MAPPING] OT search: 'Endometrial Hyperplasia' → MONDO_0006096 (atypical endometrial hyperplasia)
+[INFO] [IND_MAPPING] OT search: 'Dyslipidemia' → MONDO_0015905 (syndromic dyslipidemia)
+[INFO] [IND_MAPPING] OT search: 'End-stage liver disease' → EFO_1001311 (End Stage Liver Disease)
+[INFO] [IND_MAPPING] OT search: 'Fecal Incontinence' → EFO_0009523 (fecal incontinence)
+[INFO] [IND_MAPPING] OT search: 'Facial Aging' → EFO_0005422 (skin aging)
+[INFO] [IND_MAPPING] OT search: 'Heart Failure' → MONDO_0005252 (heart failure)
+[INFO] [IND_MAPPING] OT search: 'Facial Skin Laxity' → HP_0009762 (Facial wrinkling)
+[INFO] [IND_MAPPING] OT search: 'HIV Infections' → EFO_0000180 (HIV-1 infection)
+[INFO] [IND_MAPPING] OT search: 'Hirsutism' → HP_0001007 (Hirsutism)
+[INFO] [IND_MAPPING] OT search: 'Hyperandrogenism' → EFO_0009006 (hyperandrogenism)
+[INFO] [IND_MAPPING] OT search: 'Hypertension' → HP_0000822 (Hypertension)
+[INFO] [IND_MAPPING] OT search: 'Heart failure with preserved ejection fraction' → MONDO_0005252 (heart failure)
+[INFO] [IND_MAPPING] OT search: 'Inflammatory Bowel Disease' → MONDO_0005265 (inflammatory bowel disease)
+[INFO] [IND_MAPPING] OT search: 'Hypothalamic Obesity' → MONDO_0006799 (hypothalamic neoplasm)
+[INFO] [IND_MAPPING] OT search: 'Idiopathic intracranial hypertension' → MONDO_0018044 (idiopathic hypersomnia)
+[INFO] [IND_MAPPING] OT search: 'Metabolic Dysfunction-Associated Steatohepatitis' → MONDO_0007027 (metabolic dysfunction-associated steatohepatitis)
+[INFO] [IND_MAPPING] OT search: 'Liver cirrhosis' → MONDO_0005155 (cirrhosis of liver)
+[INFO] [IND_MAPPING] OT search: 'Metabolic Syndrome' → EFO_0000195 (metabolic syndrome)
+[INFO] [IND_MAPPING] OT search: 'Metabolic dysfunction-associated steatotic liver disease' → MONDO_0013209 (metabolic dysfunction-associated steatotic liver disease)
+[INFO] [IND_MAPPING] OT search: 'Myocardial infarction' → MONDO_0005068 (myocardial infarction)
+[INFO] [IND_MAPPING] OT search: 'Malignant Solid Neoplasm' → EFO_1000542 (Solid Pseudopapillary Neoplasm of the Pancreas)
+[INFO] [IND_MAPPING] OT search: 'Methamphetamine Use Disorder' → MONDO_0005419 (methamphetamine dependence)
+[INFO] [IND_MAPPING] OT search: 'Opioid Use Disorder' → EFO_0010702 (opioid use disorder)
+[INFO] [IND_MAPPING] OT search: 'Obstructive sleep apnea' → MONDO_0007147 (obstructive sleep apnea syndrome)
+[INFO] [IND_MAPPING] OT search: 'Polycystic Ovary Syndrome' → MONDO_0008487 (polycystic ovary syndrome)
+[INFO] [IND_MAPPING] OT search: 'Prader-Willi Syndrome' → MONDO_0008300 (Prader-Willi syndrome)
+[INFO] [IND_MAPPING] OT search: 'Nonalcoholic Fatty Liver Disease (NAFLD)' → EFO_1001248 (non-alcoholic fatty liver)
+[INFO] [IND_MAPPING] OT search: 'Pediatric Obesity' → HP_0001513 (Obesity)
+[INFO] [IND_MAPPING] OT search: 'Prediabetic State' → MONDO_0006920 (prediabetes syndrome)
+[INFO] [IND_MAPPING] OT search: 'Renal Impairment' → HP_0000083 (Renal insufficiency)
+[INFO] [IND_MAPPING] OT search: 'Sarcopenia' → EFO_1000653 (sarcopenia)
+[INFO] [IND_MAPPING] OT search: 'Pre-diabetes' → MONDO_0015967 (monogenic diabetes)
+[WARNING] [IND_MAPPING] Could not resolve 'Sarcopenic Obesity'
+[INFO] [IND_MAPPING] OT search: 'Stroke' → HP_0001297 (Stroke)
+[INFO] [IND_MAPPING] OT search: 'Stimulant Use Disorder' → EFO_0010445 (cocaine use disorder)
+[INFO] [IND_MAPPING] OT search: 'Type 1 Diabetes Mellitus' → MONDO_0005147 (type 1 diabetes mellitus)
+[INFO] [IND_MAPPING] OT search: 'Schizophrenia-spectrum disorders' → MONDO_0005090 (schizophrenia)
+[INFO] [IND_MAPPING] OT search: 'Type 1 Diabetes' → MONDO_0005147 (type 1 diabetes mellitus)
+[INFO] [IND_MAPPING] Path C: Gemini + Google Search grounding for 1 unresolved indication(s)
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] [IND_MAPPING] Path C resolved 0/1 indication(s) via search grounding (0 hallucinated ID(s) rejected)
+[INFO] [IND_MAPPING] Validating 57 resolved mapping(s)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Antipsychotic-induced weight gain' -> 'response to antipsychotic drug' (GO_0097332)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Chronic High Bowel Frequency' -> 'high grade B-cell lymphoma' (MONDO_0044889)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'End-Stage Renal Disease' -> 'End Stage Liver Disease' (EFO_1001311)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Facial Skin Laxity' -> 'Facial wrinkling' (HP_0009762)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Hypothalamic Obesity' -> 'hypothalamic neoplasm' (MONDO_0006799)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Idiopathic intracranial hypertension' -> 'idiopathic hypersomnia' (MONDO_0018044)
+[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Pre-diabetes' -> 'monogenic diabetes' (MONDO_0015967)
+[INFO] [IND_MAPPING] Validation rejected 7/57 resolved mapping(s)
+[INFO] [OT_UTILS] Table cognito-dev-380506.data_mart.ot_disease_mapping is missing column(s) resolution_path — adding them now.
+[INFO] [OT_UTILS] Upserted 70 mapping(s) into cognito-dev-380506.data_mart.ot_disease_mapping
+[INFO] [IND_MAPPING] Completed. 87 mapping(s) for 'Tirzepatide'
+[INFO] [LABEL_EXPANSION] Step 5 complete: 87 indication mapping(s)
