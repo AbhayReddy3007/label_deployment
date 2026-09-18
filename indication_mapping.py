@@ -71,6 +71,25 @@ _OT_MAX_RETRIES = 3        # retry OT API calls with exponential backoff
 
 _MEASUREMENT_PREFIXES = ("measurement", "process", "risk measurement", "risk factor")
 
+# Valid Open Targets disease ID prefixes — these are real disease entities
+# on the OT Platform.  HP_ (Human Phenotype Ontology) and GO_ (Gene
+# Ontology) terms show up in OT API search results but are NOT disease
+# pages on the platform and can't be found by users.
+_VALID_DISEASE_PREFIXES = ("EFO_", "MONDO_", "Orphanet_", "OTAR_")
+_NON_DISEASE_PREFIXES = ("HP_", "GO_")
+
+
+def _is_valid_disease_id(disease_id: str | None) -> bool:
+    """Return True if the ID is a proper OT disease entity (EFO/MONDO/Orphanet).
+
+    HP_ (phenotype) and GO_ (gene ontology) IDs exist in the OT API but
+    are NOT disease entries — they can't be found on the OT Platform UI
+    and shouldn't be used as disease mappings.
+    """
+    if not disease_id:
+        return False
+    return disease_id.startswith(_VALID_DISEASE_PREFIXES)
+
 MEDICAL_SYNONYMS: dict[str, list[str]] = {
     # --- Cardiovascular ---
     "hfpef":         ["heart failure with preserved ejection fraction", "heart failure"],
@@ -443,11 +462,21 @@ def ot_search_disease(name: str) -> tuple[str | None, str | None]:
     if not all_candidates:
         return None, None
 
+    # Filter out non-disease IDs (HP_, GO_) — these aren't real disease
+    # entries on the OT Platform
+    disease_candidates = [(cid, cname) for cid, cname in all_candidates if _is_valid_disease_id(cid)]
+    if not disease_candidates:
+        logger.warning(
+            "[IND_MAPPING] OT search for '%s' returned only non-disease IDs (HP_/GO_) — skipping",
+            name,
+        )
+        return None, None
+
     # Score candidates with IDF-like weighting
     query_words = set(re.findall(r"[a-z]{3,}", name.lower()))
     best_id, best_name, best_score = None, None, -999.0
 
-    for rank, (cid, cname) in enumerate(all_candidates):
+    for rank, (cid, cname) in enumerate(disease_candidates):
         score = 0.0
         cname_lower = (cname or "").lower()
         query_lower = name.lower().strip()
@@ -644,7 +673,10 @@ def fetch_all_target_diseases(
                 name = d.get("name", "")
                 if did and did not in seen:
                     seen.add(did)
-                    all_diseases.append((did, name))
+                    # Only keep valid disease IDs (EFO_/MONDO_/Orphanet_),
+                    # skip HP_/GO_ phenotype/ontology entries
+                    if _is_valid_disease_id(did):
+                        all_diseases.append((did, name))
             fetched += len(rows)
             if fetched >= (total or 0):
                 break
@@ -661,9 +693,18 @@ def _gemini_match_batch(
     indications: list[str],
     ot_diseases: list[tuple[str, str]],
 ) -> list[tuple[str, str | None, str | None]]:
-    """One Gemini call to semantically match indications against an OT disease chunk."""
+    """One Gemini call to semantically match indications against an OT disease chunk.
+
+    Filters out non-disease IDs (HP_, GO_) from the disease list before
+    sending to Gemini, so only valid EFO_/MONDO_ entries are matchable.
+    """
+    # Filter to valid disease IDs only — don't show HP_/GO_ to Gemini
+    valid_diseases = [(did, dname) for did, dname in ot_diseases if _is_valid_disease_id(did)]
+    if not valid_diseases:
+        return [(ind, None, None) for ind in indications]
+
     disease_lines = "\n".join(
-        f"{i + 1}. {dname} | {did}" for i, (did, dname) in enumerate(ot_diseases)
+        f"{i + 1}. {dname} | {did}" for i, (did, dname) in enumerate(valid_diseases)
     )
     ind_numbered = "\n".join(f"{i + 1}. {ind}" for i, ind in enumerate(indications))
 
@@ -693,7 +734,7 @@ def _gemini_match_batch(
     if not parsed:
         return [(ind, None, None) for ind in indications]
 
-    valid_ids = {did: dname for did, dname in ot_diseases}
+    valid_ids = {did: dname for did, dname in valid_diseases}
     results: list[tuple[str, str | None, str | None]] = []
 
     for item in parsed:
@@ -715,6 +756,43 @@ def _gemini_match_batch(
     return results
 
 
+def _score_match(indication: str, disease_id: str, disease_name: str) -> float:
+    """Score how well a disease matches an indication.
+
+    Used to pick the BEST match across all disease chunks rather than
+    taking the first one Gemini returns.
+    """
+    score = 0.0
+    ind_lower = indication.lower().strip()
+    name_lower = (disease_name or "").lower().strip()
+
+    # Strong bonus for valid disease IDs (EFO_/MONDO_), reject HP_/GO_
+    if _is_valid_disease_id(disease_id):
+        score += 100
+    else:
+        # Non-disease IDs should never win over a real disease match
+        score -= 500
+
+    # Exact name match is ideal
+    if name_lower == ind_lower:
+        score += 200
+    elif _to_american(name_lower) == _to_american(ind_lower):
+        score += 200
+    elif re.sub(r"aemia\b", "emia", name_lower) == ind_lower:
+        score += 200
+
+    # IDF-weighted word overlap
+    ind_words = set(re.findall(r"[a-z]{3,}", ind_lower))
+    name_words = set(re.findall(r"[a-z]{3,}", name_lower))
+    score += _weighted_word_score(ind_words, name_words)
+
+    # Bonus if disease name is a proper superset or subset match
+    if _is_disease_hit(disease_name):
+        score += 50
+
+    return score
+
+
 def _match_all_against_ot_list(
     indications: list[str],
     ot_diseases: list[tuple[str, str]],
@@ -723,13 +801,15 @@ def _match_all_against_ot_list(
     chunking the disease list into groups of ``_DISEASE_CHUNK_SIZE`` AND
     batching indications into groups of ``_INDICATION_BATCH_SIZE``.
 
-    Sending all indications in one Gemini call with a large disease list
-    overwhelms the model (200 diseases + 58 indications caused Gemini to
-    return null for most). Smaller batches of ~15 indications per call
-    dramatically improve hit rate.
+    Every indication is checked against EVERY disease chunk. All candidate
+    matches are collected, then the best match per indication is selected
+    using ``_score_match`` scoring. This ensures the best match wins even
+    if a weaker match is found in an earlier chunk.
+
+    Non-disease IDs (HP_, GO_) returned by Gemini are filtered out.
     """
-    result: dict[str, tuple[str | None, str | None]] = {ind: (None, None) for ind in indications}
-    remaining = list(indications)
+    # Collect ALL candidate matches: {indication: [(did, name, score), ...]}
+    all_candidates: dict[str, list[tuple[str, str, float]]] = {ind: [] for ind in indications}
     total_chunks = (len(ot_diseases) + _DISEASE_CHUNK_SIZE - 1) // _DISEASE_CHUNK_SIZE
 
     logger.info(
@@ -739,17 +819,14 @@ def _match_all_against_ot_list(
     )
 
     for chunk_idx in range(total_chunks):
-        if not remaining:
-            break
         disease_chunk = ot_diseases[chunk_idx * _DISEASE_CHUNK_SIZE : (chunk_idx + 1) * _DISEASE_CHUNK_SIZE]
 
         # Sub-batch indications so each Gemini call is small enough to
         # produce reliable results
         ind_batches = [
-            remaining[i : i + _INDICATION_BATCH_SIZE]
-            for i in range(0, len(remaining), _INDICATION_BATCH_SIZE)
+            indications[i : i + _INDICATION_BATCH_SIZE]
+            for i in range(0, len(indications), _INDICATION_BATCH_SIZE)
         ]
-        still_unresolved = []
 
         for batch_idx, ind_batch in enumerate(ind_batches):
             batch_results = None
@@ -766,18 +843,47 @@ def _match_all_against_ot_list(
                 time.sleep(2)
 
             if not batch_results:
-                still_unresolved.extend(ind_batch)
                 continue
 
             for ind, did, name in batch_results:
-                if did:
-                    result[ind] = (did, name)
-                    logger.info("[IND_MAPPING] Gemini: '%s' → %s (%s)", ind, did, name)
-                else:
-                    still_unresolved.append(ind)
+                if did and name:
+                    score = _score_match(ind, did, name)
+                    all_candidates[ind].append((did, name, score))
+                    logger.debug(
+                        "[IND_MAPPING] Gemini candidate: '%s' → %s (%s) [score=%.1f]",
+                        ind, did, name, score,
+                    )
 
-        remaining = still_unresolved
+    # Pick the best match per indication
+    result: dict[str, tuple[str | None, str | None]] = {}
+    for ind in indications:
+        candidates = all_candidates[ind]
+        if not candidates:
+            result[ind] = (None, None)
+            continue
 
+        # Filter to valid disease IDs only
+        valid = [(did, name, sc) for did, name, sc in candidates if _is_valid_disease_id(did)]
+        if not valid:
+            logger.warning(
+                "[IND_MAPPING] Gemini matched '%s' only to non-disease IDs (%s) — discarding",
+                ind,
+                ", ".join(f"{did}" for did, _, _ in candidates),
+            )
+            result[ind] = (None, None)
+            continue
+
+        # Sort by score descending, pick the best
+        valid.sort(key=lambda x: x[2], reverse=True)
+        best_did, best_name, best_score = valid[0]
+        result[ind] = (best_did, best_name)
+        logger.info("[IND_MAPPING] Gemini best: '%s' → %s (%s) [score=%.1f]", ind, best_did, best_name, best_score)
+
+    matched = sum(1 for did, _ in result.values() if did)
+    logger.info(
+        "[IND_MAPPING] Gemini matched %d/%d indication(s) across %d disease chunk(s)",
+        matched, len(indications), total_chunks,
+    )
     return result
 
 
@@ -1102,11 +1208,20 @@ Return ONLY a JSON array — no markdown fences, no explanation:
 
 
 def _verify_ot_id(disease_id: str) -> tuple[str | None, str | None]:
-    """Verify an EFO/MONDO ID actually exists in the OT API.
+    """Verify an EFO/MONDO ID actually exists in the OT API AND is a
+    real disease entity (not an HP_/GO_ phenotype/ontology term).
 
     Returns ``(disease_id, disease_name)`` if valid, ``(None, None)`` if
-    the ID doesn't exist (hallucinated by Gemini).
+    the ID doesn't exist or isn't a proper disease entry.
     """
+    # Reject non-disease prefixes before even calling the API
+    if not _is_valid_disease_id(disease_id):
+        logger.warning(
+            "[IND_MAPPING] Rejecting non-disease ID '%s' (not EFO_/MONDO_/Orphanet_)",
+            disease_id,
+        )
+        return None, None
+
     graphql = """
     query VerifyDisease($id: String!) {
       disease(efoId: $id) {
