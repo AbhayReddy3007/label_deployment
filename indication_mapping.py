@@ -63,7 +63,8 @@ OT_DISEASE_SCHEMA: list[bigquery.SchemaField] = [
 # ==============================
 # CONSTANTS
 # ==============================
-_DISEASE_CHUNK_SIZE = 200
+_DISEASE_CHUNK_SIZE = 100
+_INDICATION_BATCH_SIZE = 15  # max indications per Gemini Path A call
 _WORKERS = 3
 _OT_SEARCH_PAGE_SIZE = 15  # was 5 — larger window catches better matches
 _OT_MAX_RETRIES = 3        # retry OT API calls with exponential backoff
@@ -719,41 +720,62 @@ def _match_all_against_ot_list(
     ot_diseases: list[tuple[str, str]],
 ) -> dict[str, tuple[str | None, str | None]]:
     """Match all indications against the full OT disease list using Gemini,
-    chunking the disease list into groups of ``_DISEASE_CHUNK_SIZE``."""
+    chunking the disease list into groups of ``_DISEASE_CHUNK_SIZE`` AND
+    batching indications into groups of ``_INDICATION_BATCH_SIZE``.
+
+    Sending all indications in one Gemini call with a large disease list
+    overwhelms the model (200 diseases + 58 indications caused Gemini to
+    return null for most). Smaller batches of ~15 indications per call
+    dramatically improve hit rate.
+    """
     result: dict[str, tuple[str | None, str | None]] = {ind: (None, None) for ind in indications}
     remaining = list(indications)
     total_chunks = (len(ot_diseases) + _DISEASE_CHUNK_SIZE - 1) // _DISEASE_CHUNK_SIZE
 
     logger.info(
-        "[IND_MAPPING] Gemini matching: %d indication(s) × %d diseases → %d chunk(s)",
-        len(indications), len(ot_diseases), total_chunks,
+        "[IND_MAPPING] Gemini matching: %d indication(s) × %d diseases → "
+        "%d disease chunk(s), indication batches of %d",
+        len(indications), len(ot_diseases), total_chunks, _INDICATION_BATCH_SIZE,
     )
 
     for chunk_idx in range(total_chunks):
         if not remaining:
             break
-        chunk = ot_diseases[chunk_idx * _DISEASE_CHUNK_SIZE : (chunk_idx + 1) * _DISEASE_CHUNK_SIZE]
+        disease_chunk = ot_diseases[chunk_idx * _DISEASE_CHUNK_SIZE : (chunk_idx + 1) * _DISEASE_CHUNK_SIZE]
 
-        batch_results = None
-        for attempt in range(1, 3):
-            try:
-                batch_results = _gemini_match_batch(remaining, chunk)
-                if len(batch_results) == len(remaining):
-                    break
-            except Exception as exc:
-                logger.warning("[IND_MAPPING] Chunk %d attempt %d failed: %s", chunk_idx + 1, attempt, exc)
-            time.sleep(2)
-
-        if not batch_results:
-            continue
-
+        # Sub-batch indications so each Gemini call is small enough to
+        # produce reliable results
+        ind_batches = [
+            remaining[i : i + _INDICATION_BATCH_SIZE]
+            for i in range(0, len(remaining), _INDICATION_BATCH_SIZE)
+        ]
         still_unresolved = []
-        for ind, did, name in batch_results:
-            if did:
-                result[ind] = (did, name)
-                logger.info("[IND_MAPPING] Gemini: '%s' → %s (%s)", ind, did, name)
-            else:
-                still_unresolved.append(ind)
+
+        for batch_idx, ind_batch in enumerate(ind_batches):
+            batch_results = None
+            for attempt in range(1, 3):
+                try:
+                    batch_results = _gemini_match_batch(ind_batch, disease_chunk)
+                    if len(batch_results) == len(ind_batch):
+                        break
+                except Exception as exc:
+                    logger.warning(
+                        "[IND_MAPPING] Disease chunk %d, ind batch %d, attempt %d failed: %s",
+                        chunk_idx + 1, batch_idx + 1, attempt, exc,
+                    )
+                time.sleep(2)
+
+            if not batch_results:
+                still_unresolved.extend(ind_batch)
+                continue
+
+            for ind, did, name in batch_results:
+                if did:
+                    result[ind] = (did, name)
+                    logger.info("[IND_MAPPING] Gemini: '%s' → %s (%s)", ind, did, name)
+                else:
+                    still_unresolved.append(ind)
+
         remaining = still_unresolved
 
     return result
@@ -1303,22 +1325,51 @@ def revalidate_existing_mappings(drug_name: str, secondary_only: bool = False) -
 def validate_resolved_mappings(
     resolved: dict[str, tuple[str | None, str | None]],
 ) -> dict[str, tuple[str | None, str | None]]:
-    """Re-checks every resolved (Path A or Path B) mapping with a
-    dedicated Gemini QC pass, nulling out any match that isn't a genuine
-    clinical match (rather than a word-overlap false positive). A null
-    mapping is preferable to a confidently wrong one - it simply means
-    that indication won't get an association_score."""
+    """Re-checks every resolved (Path A or Path B) mapping with:
+    1. Over-specificity detection — rejects when OT name is a strict
+       subtype/qualifier of the indication (e.g. "syndromic dyslipidemia"
+       for "dyslipidemia").
+    2. Gemini QC pass — rejects word-overlap false positives (e.g.
+       "renal impairment" → "renal carcinoma").
+
+    Fail-CLOSED: a null mapping is preferable to a confidently wrong one.
+    """
     to_check = [(ind, did, name) for ind, (did, name) in resolved.items() if did and name]
     if not to_check:
         return resolved
 
     logger.info("[IND_MAPPING] Validating %d resolved mapping(s)", len(to_check))
     validated = dict(resolved)
+
+    # Phase 1: Over-specificity check (fast, no API calls)
+    overspecific_rejected = 0
+    still_to_check = []
+    for ind, did, name in to_check:
+        if _is_overspecific_match(ind, name):
+            logger.warning(
+                "[IND_MAPPING] Rejected over-specific match: '%s' -> '%s' (%s)",
+                ind, name, did,
+            )
+            validated[ind] = (None, None)
+            overspecific_rejected += 1
+        else:
+            still_to_check.append((ind, did, name))
+
+    if overspecific_rejected:
+        logger.info(
+            "[IND_MAPPING] Over-specificity check rejected %d/%d mapping(s)",
+            overspecific_rejected, len(to_check),
+        )
+
+    # Phase 2: Gemini QC validation
+    if not still_to_check:
+        return validated
+
     batches = [
-        to_check[i : i + _VALIDATE_BATCH_SIZE]
-        for i in range(0, len(to_check), _VALIDATE_BATCH_SIZE)
+        still_to_check[i : i + _VALIDATE_BATCH_SIZE]
+        for i in range(0, len(still_to_check), _VALIDATE_BATCH_SIZE)
     ]
-    rejected = 0
+    gemini_rejected = 0
     for batch in batches:
         pairs = [(ind, name) for ind, _did, name in batch]
         results = _validate_match_batch(pairs)
@@ -1329,11 +1380,176 @@ def validate_resolved_mappings(
                     ind, name, did,
                 )
                 validated[ind] = (None, None)
-                rejected += 1
+                gemini_rejected += 1
 
-    if rejected:
-        logger.info("[IND_MAPPING] Validation rejected %d/%d resolved mapping(s)", rejected, len(to_check))
+    total_rejected = overspecific_rejected + gemini_rejected
+    if total_rejected:
+        logger.info(
+            "[IND_MAPPING] Validation rejected %d/%d resolved mapping(s) "
+            "(%d over-specific, %d false-positive)",
+            total_rejected, len(to_check), overspecific_rejected, gemini_rejected,
+        )
     return validated
+
+
+# ==============================
+# OVER-SPECIFICITY DETECTION
+# ==============================
+# Qualifiers that make an OT disease name a strict subtype of the indication.
+# E.g. "dyslipidemia" → "syndromic dyslipidemia" is over-specific.
+_OVERSPECIFIC_QUALIFIERS = re.compile(
+    r"\b(syndromic|atypical|familial|hereditary|congenital|acquired|juvenile|"
+    r"infantile|neonatal|adult[- ]onset|childhood[- ]onset|autosomal|"
+    r"x[- ]linked|idiopathic|secondary|primary|essential|benign|"
+    r"malignant|chronic|acute|recurrent|persistent|intermittent|"
+    r"drug[- ]induced|radiation[- ]induced|autoimmune|non[- ]autoimmune)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def _is_overspecific_match(indication: str, ot_name: str) -> bool:
+    """Detect when the OT disease name is an over-specific subtype of the
+    indication — e.g. ``dyslipidemia`` matched to ``syndromic dyslipidemia``,
+    or ``endometrial hyperplasia`` matched to ``atypical endometrial
+    hyperplasia``. The user's indication is a broader category and the OT
+    match adds qualifying words that narrow it to a strict subtype.
+
+    Returns True when the match should be rejected as over-specific.
+    """
+    ind_lower = indication.lower().strip()
+    ot_lower = ot_name.lower().strip()
+
+    # Exact or near-exact match — never over-specific
+    if ind_lower == ot_lower:
+        return False
+    if _to_american(ind_lower) == _to_american(ot_lower):
+        return False
+
+    # Check if the indication text is a substring of the OT name
+    # (i.e. OT name = indication + extra words)
+    if ind_lower not in ot_lower:
+        # Also check normalized forms
+        ind_norm = normalize_indication(indication)
+        ot_norm = normalize_indication(ot_name)
+        if ind_norm == ot_norm:
+            return False
+        if ind_norm not in ot_norm:
+            return False
+
+    # The indication IS a substring of the OT name.
+    # Check if the extra words are qualifying/narrowing words.
+    ind_words = set(re.findall(r"[a-z]{3,}", ind_lower))
+    ot_words = set(re.findall(r"[a-z]{3,}", ot_lower))
+    extra_words = ot_words - ind_words
+
+    if not extra_words:
+        return False
+
+    # If the extra words are mostly qualifying/narrowing terms, it's
+    # over-specific. Check if ANY extra word is a subtype qualifier.
+    extra_text = " ".join(extra_words)
+    if _OVERSPECIFIC_QUALIFIERS.search(extra_text):
+        return True
+
+    # Also catch patterns like "X use disorder" → "cocaine use disorder"
+    # where the extra word is a specific substance/type
+    # If the indication is a broad category and OT adds a specific
+    # instance, that's over-specific
+    if len(ind_words) >= 2 and len(extra_words) <= 2:
+        # The indication has the core concept, OT just adds a specific type
+        overlap_ratio = len(ind_words & ot_words) / len(ind_words)
+        if overlap_ratio >= 0.8:  # Most of the indication words are in the OT name
+            return True
+
+    return False
+
+
+# ==============================
+# POST-VALIDATION RE-RESOLUTION FALLBACK
+# ==============================
+def _re_resolve_rejected(
+    rejected_indications: list[str],
+    canonical_hint_map: dict[str, str],
+) -> tuple[dict[str, tuple[str | None, str | None]], dict[str, str]]:
+    """Re-attempt resolution for indications whose initial match was
+    rejected by validation (false positive or over-specific).
+
+    Uses a more targeted approach:
+    1. First tries Path B (OT text search) with the raw indication text —
+       the initial match may have come from Path A which matched against
+       a disease list, while Path B does a direct text search that may
+       find a better (broader) match.
+    2. For anything still unresolved, tries Path C (Gemini + Google Search
+       grounding with OT API verification).
+
+    Returns ``(resolved_map, resolution_paths)`` — same format as the
+    main pipeline uses.
+    """
+    if not rejected_indications:
+        return {}, {}
+
+    logger.info(
+        "[IND_MAPPING] Re-resolution fallback: attempting %d rejected indication(s)",
+        len(rejected_indications),
+    )
+
+    resolved_map: dict[str, tuple[str | None, str | None]] = {}
+    resolution_paths: dict[str, str] = {}
+
+    # Round 1: Path B — targeted OT text search
+    still_unresolved = []
+    with ThreadPoolExecutor(
+        max_workers=min(_WORKERS, len(rejected_indications)),
+        thread_name_prefix="re-resolve",
+    ) as exe:
+        def _resolve_one(ind: str) -> tuple[str, str | None, str | None]:
+            did, name = _resolve_via_ot_search(ind, llm_ot_name=canonical_hint_map.get(ind))
+            return ind, did, name
+
+        futures = {exe.submit(_resolve_one, ind): ind for ind in rejected_indications}
+        for fut in as_completed(futures):
+            ind, did, name = fut.result()
+            if did and name:
+                # Check for over-specificity before accepting
+                if _is_overspecific_match(ind, name):
+                    logger.warning(
+                        "[IND_MAPPING] Re-resolve Path B: over-specific match for '%s' → '%s' — skipping",
+                        ind, name,
+                    )
+                    still_unresolved.append(ind)
+                else:
+                    resolved_map[ind] = (did, name)
+                    resolution_paths[ind] = "path_b_retry"
+                    logger.info("[IND_MAPPING] Re-resolve Path B: '%s' → %s (%s)", ind, did, name)
+            else:
+                still_unresolved.append(ind)
+
+    # Round 2: Path C — Gemini + Google Search grounding
+    if still_unresolved:
+        logger.info(
+            "[IND_MAPPING] Re-resolve Path C for %d still-unresolved indication(s)",
+            len(still_unresolved),
+        )
+        path_c_results = resolve_via_search_grounding(still_unresolved)
+        for ind, (did, name) in path_c_results.items():
+            if did and name:
+                if _is_overspecific_match(ind, name):
+                    logger.warning(
+                        "[IND_MAPPING] Re-resolve Path C: over-specific match for '%s' → '%s' — skipping",
+                        ind, name,
+                    )
+                else:
+                    resolved_map[ind] = (did, name)
+                    resolution_paths[ind] = "path_c_retry"
+                    logger.info("[IND_MAPPING] Re-resolve Path C: '%s' → %s (%s)", ind, did, name)
+
+    re_resolved_count = len(resolved_map)
+    total = len(rejected_indications)
+    logger.info(
+        "[IND_MAPPING] Re-resolution fallback: recovered %d/%d rejected indication(s)",
+        re_resolved_count, total,
+    )
+    return resolved_map, resolution_paths
 
 
 # ==============================
@@ -1354,16 +1570,23 @@ def run_indication_mapping(
     3. Normalize and deduplicate new indications by spelling.
     4. Cluster the normalized representatives semantically (Gemini), with
        cross-chunk reconciliation to merge synonyms split across chunks.
-    5. Resolve each canonical cluster via Path A (Gemini + OT disease list)
-       if targets given, then Path B (OT text search with retry, seeded with
-       the LLM-suggested OT name when available) for any remaining, then
+    5. Resolve each canonical cluster via Path A (Gemini + OT disease list,
+       with indication batching for reliable results) if targets given,
+       then Path B (OT text search with retry, seeded with the
+       LLM-suggested OT name when available) for any remaining, then
        Path C (Gemini + Google Search grounding, with OT API verification
        to reject hallucinated IDs) for anything still unresolved.
-    6. Validate every resolved mapping with a dedicated Gemini QC pass
-       (fail-closed: API errors reject the batch rather than accepting),
-       nulling out matches that are word-overlap false positives.
-    7. Push new mappings to ``OT_DISEASE_TABLE`` with ``resolution_path``
-       tracking which path resolved each mapping.
+    6. Validate every resolved mapping with over-specificity detection
+       AND a dedicated Gemini QC pass (fail-closed: API errors reject the
+       batch rather than accepting), nulling out matches that are
+       over-specific subtypes or word-overlap false positives.
+    6.5 Re-resolution fallback: indications rejected by validation are
+        re-attempted via Path B (targeted search) and Path C (search
+        grounding) to find a better, broader match.
+    7. Push ONLY correctly resolved mappings to ``OT_DISEASE_TABLE`` —
+       null/unresolved mappings are NOT pushed, so the table contains
+       only verified matches. Unresolved indications will be re-attempted
+       on the next run.
     8. Return all resolved mappings (existing + new).
 
     Args:
@@ -1533,9 +1756,46 @@ def run_indication_mapping(
 
     # Step 6: Validate every resolved mapping (Path A, B, and C alike) —
     # rejects word-overlap false positives (e.g. "renal impairment" ->
-    # "renal carcinoma") rather than storing a confidently wrong match.
-    # Now fail-CLOSED: API errors reject the batch rather than accepting.
+    # "renal carcinoma") AND over-specific matches (e.g. "dyslipidemia" ->
+    # "syndromic dyslipidemia") rather than storing wrong matches.
+    # Fail-CLOSED: API errors reject the batch rather than accepting.
+    pre_validation_resolved = {
+        ind: (did, name) for ind, (did, name) in resolved_map.items() if did and name
+    }
     resolved_map = validate_resolved_mappings(resolved_map)
+
+    # Step 6.5: Re-resolution fallback — collect indications that were
+    # resolved but then REJECTED by validation, and re-attempt them via
+    # Path B (targeted search) and Path C (search grounding). This
+    # recovers mappings that were rejected because Path A found an
+    # over-specific or false-positive match, but a better match exists.
+    rejected_by_validation = [
+        ind for ind in canonical_reps
+        if ind in pre_validation_resolved  # was resolved before validation
+        and not resolved_map.get(ind, (None, None))[0]  # now null after validation
+    ]
+    if rejected_by_validation:
+        logger.info(
+            "[IND_MAPPING] %d mapping(s) rejected by validation — attempting re-resolution",
+            len(rejected_by_validation),
+        )
+        re_resolved, re_paths = _re_resolve_rejected(rejected_by_validation, canonical_hint_map)
+
+        # Validate the re-resolved mappings too (same QC standard)
+        if re_resolved:
+            re_resolved = validate_resolved_mappings(re_resolved)
+
+        # Merge successful re-resolutions back into the main maps
+        for ind, (did, name) in re_resolved.items():
+            if did and name:
+                resolved_map[ind] = (did, name)
+                resolution_paths[ind] = re_paths.get(ind, "retry")
+
+        re_recovered = sum(1 for did, name in re_resolved.values() if did and name)
+        logger.info(
+            "[IND_MAPPING] Re-resolution recovered %d/%d rejected mapping(s)",
+            re_recovered, len(rejected_by_validation),
+        )
 
     # Map canonical cluster results back to every raw variant that fed it
     final_resolved: dict[str, tuple[str | None, str | None]] = {}
@@ -1547,21 +1807,35 @@ def run_indication_mapping(
         final_resolved[raw] = resolved_map.get(canonical, (None, None))
         final_paths[raw] = resolution_paths.get(canonical, "unresolved")
 
-    # Step 7: Push new mappings to BQ (one row per raw indication text,
-    # even though several raw variants may share the same resolved result)
+    # Step 7: Push ONLY correctly resolved mappings to BQ — null/unresolved
+    # mappings are NOT pushed so the table only contains verified matches.
+    # Unresolved indications will be re-attempted on the next run.
     new_rows: list[dict] = []
     pushed_keys: set[str] = set()
+    skipped_null = 0
     for raw, (did, name) in final_resolved.items():
         key = raw.strip().lower()
-        if key not in pushed_keys:
-            pushed_keys.add(key)
+        if key in pushed_keys:
+            continue
+        pushed_keys.add(key)
+        if did and name:
             new_rows.append({
                 "indication": raw,
                 "ot_disease": name,
                 "ot_disease_id": did,
                 "resolution_path": final_paths.get(raw, "unresolved"),
             })
-    push_mappings(OT_DISEASE_TABLE, OT_DISEASE_SCHEMA, new_rows)
+        else:
+            skipped_null += 1
+    if skipped_null:
+        logger.info(
+            "[IND_MAPPING] Skipping %d unresolved mapping(s) — only pushing %d verified match(es) to BQ",
+            skipped_null, len(new_rows),
+        )
+    if new_rows:
+        push_mappings(OT_DISEASE_TABLE, OT_DISEASE_SCHEMA, new_rows)
+    else:
+        logger.info("[IND_MAPPING] No new verified mappings to push to BQ")
 
     # Step 8: Return all mappings
     all_mappings: list[dict] = []
