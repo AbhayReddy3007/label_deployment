@@ -1440,12 +1440,9 @@ def revalidate_existing_mappings(drug_name: str, secondary_only: bool = False) -
 def validate_resolved_mappings(
     resolved: dict[str, tuple[str | None, str | None]],
 ) -> dict[str, tuple[str | None, str | None]]:
-    """Re-checks every resolved (Path A or Path B) mapping with:
-    1. Over-specificity detection — rejects when OT name is a strict
-       subtype/qualifier of the indication (e.g. "syndromic dyslipidemia"
-       for "dyslipidemia").
-    2. Gemini QC pass — rejects word-overlap false positives (e.g.
-       "renal impairment" → "renal carcinoma").
+    """Re-checks every resolved mapping with a Gemini QC pass, nulling
+    out any match that isn't a genuine clinical match (rather than a
+    word-overlap false positive like "renal impairment" → "renal carcinoma").
 
     Fail-CLOSED: a null mapping is preferable to a confidently wrong one.
     """
@@ -1456,35 +1453,11 @@ def validate_resolved_mappings(
     logger.info("[IND_MAPPING] Validating %d resolved mapping(s)", len(to_check))
     validated = dict(resolved)
 
-    # Phase 1: Over-specificity check (fast, no API calls)
-    overspecific_rejected = 0
-    still_to_check = []
-    for ind, did, name in to_check:
-        if _is_overspecific_match(ind, name):
-            logger.warning(
-                "[IND_MAPPING] Rejected over-specific match: '%s' -> '%s' (%s)",
-                ind, name, did,
-            )
-            validated[ind] = (None, None)
-            overspecific_rejected += 1
-        else:
-            still_to_check.append((ind, did, name))
-
-    if overspecific_rejected:
-        logger.info(
-            "[IND_MAPPING] Over-specificity check rejected %d/%d mapping(s)",
-            overspecific_rejected, len(to_check),
-        )
-
-    # Phase 2: Gemini QC validation
-    if not still_to_check:
-        return validated
-
     batches = [
-        still_to_check[i : i + _VALIDATE_BATCH_SIZE]
-        for i in range(0, len(still_to_check), _VALIDATE_BATCH_SIZE)
+        to_check[i : i + _VALIDATE_BATCH_SIZE]
+        for i in range(0, len(to_check), _VALIDATE_BATCH_SIZE)
     ]
-    gemini_rejected = 0
+    rejected = 0
     for batch in batches:
         pairs = [(ind, name) for ind, _did, name in batch]
         results = _validate_match_batch(pairs)
@@ -1495,88 +1468,11 @@ def validate_resolved_mappings(
                     ind, name, did,
                 )
                 validated[ind] = (None, None)
-                gemini_rejected += 1
+                rejected += 1
 
-    total_rejected = overspecific_rejected + gemini_rejected
-    if total_rejected:
-        logger.info(
-            "[IND_MAPPING] Validation rejected %d/%d resolved mapping(s) "
-            "(%d over-specific, %d false-positive)",
-            total_rejected, len(to_check), overspecific_rejected, gemini_rejected,
-        )
+    if rejected:
+        logger.info("[IND_MAPPING] Validation rejected %d/%d resolved mapping(s)", rejected, len(to_check))
     return validated
-
-
-# ==============================
-# OVER-SPECIFICITY DETECTION
-# ==============================
-# Qualifiers that make an OT disease name a strict subtype of the indication.
-# E.g. "dyslipidemia" → "syndromic dyslipidemia" is over-specific.
-_OVERSPECIFIC_QUALIFIERS = re.compile(
-    r"\b(syndromic|atypical|familial|hereditary|congenital|acquired|juvenile|"
-    r"infantile|neonatal|adult[- ]onset|childhood[- ]onset|autosomal|"
-    r"x[- ]linked|idiopathic|secondary|primary|essential|benign|"
-    r"malignant|chronic|acute|recurrent|persistent|intermittent|"
-    r"drug[- ]induced|radiation[- ]induced|autoimmune|non[- ]autoimmune)\b",
-    flags=re.IGNORECASE,
-)
-
-
-def _is_overspecific_match(indication: str, ot_name: str) -> bool:
-    """Detect when the OT disease name is an over-specific subtype of the
-    indication — e.g. ``dyslipidemia`` matched to ``syndromic dyslipidemia``,
-    or ``endometrial hyperplasia`` matched to ``atypical endometrial
-    hyperplasia``. The user's indication is a broader category and the OT
-    match adds qualifying words that narrow it to a strict subtype.
-
-    Returns True when the match should be rejected as over-specific.
-    """
-    ind_lower = indication.lower().strip()
-    ot_lower = ot_name.lower().strip()
-
-    # Exact or near-exact match — never over-specific
-    if ind_lower == ot_lower:
-        return False
-    if _to_american(ind_lower) == _to_american(ot_lower):
-        return False
-
-    # Check if the indication text is a substring of the OT name
-    # (i.e. OT name = indication + extra words)
-    if ind_lower not in ot_lower:
-        # Also check normalized forms
-        ind_norm = normalize_indication(indication)
-        ot_norm = normalize_indication(ot_name)
-        if ind_norm == ot_norm:
-            return False
-        if ind_norm not in ot_norm:
-            return False
-
-    # The indication IS a substring of the OT name.
-    # Check if the extra words are qualifying/narrowing words.
-    ind_words = set(re.findall(r"[a-z]{3,}", ind_lower))
-    ot_words = set(re.findall(r"[a-z]{3,}", ot_lower))
-    extra_words = ot_words - ind_words
-
-    if not extra_words:
-        return False
-
-    # If the extra words are mostly qualifying/narrowing terms, it's
-    # over-specific. Check if ANY extra word is a subtype qualifier.
-    extra_text = " ".join(extra_words)
-    if _OVERSPECIFIC_QUALIFIERS.search(extra_text):
-        return True
-
-    # Also catch patterns like "X use disorder" → "cocaine use disorder"
-    # where the extra word is a specific substance/type
-    # If the indication is a broad category and OT adds a specific
-    # instance, that's over-specific
-    if len(ind_words) >= 2 and len(extra_words) <= 2:
-        # The indication has the core concept, OT just adds a specific type
-        overlap_ratio = len(ind_words & ot_words) / len(ind_words)
-        if overlap_ratio >= 0.8:  # Most of the indication words are in the OT name
-            return True
-
-    return False
 
 
 # ==============================
@@ -1587,7 +1483,7 @@ def _re_resolve_rejected(
     canonical_hint_map: dict[str, str],
 ) -> tuple[dict[str, tuple[str | None, str | None]], dict[str, str]]:
     """Re-attempt resolution for indications whose initial match was
-    rejected by validation (false positive or over-specific).
+    rejected by validation (false positive).
 
     Uses a more targeted approach:
     1. First tries Path B (OT text search) with the raw indication text —
@@ -1625,17 +1521,9 @@ def _re_resolve_rejected(
         for fut in as_completed(futures):
             ind, did, name = fut.result()
             if did and name:
-                # Check for over-specificity before accepting
-                if _is_overspecific_match(ind, name):
-                    logger.warning(
-                        "[IND_MAPPING] Re-resolve Path B: over-specific match for '%s' → '%s' — skipping",
-                        ind, name,
-                    )
-                    still_unresolved.append(ind)
-                else:
-                    resolved_map[ind] = (did, name)
-                    resolution_paths[ind] = "path_b_retry"
-                    logger.info("[IND_MAPPING] Re-resolve Path B: '%s' → %s (%s)", ind, did, name)
+                resolved_map[ind] = (did, name)
+                resolution_paths[ind] = "path_b_retry"
+                logger.info("[IND_MAPPING] Re-resolve Path B: '%s' → %s (%s)", ind, did, name)
             else:
                 still_unresolved.append(ind)
 
@@ -1648,15 +1536,9 @@ def _re_resolve_rejected(
         path_c_results = resolve_via_search_grounding(still_unresolved)
         for ind, (did, name) in path_c_results.items():
             if did and name:
-                if _is_overspecific_match(ind, name):
-                    logger.warning(
-                        "[IND_MAPPING] Re-resolve Path C: over-specific match for '%s' → '%s' — skipping",
-                        ind, name,
-                    )
-                else:
-                    resolved_map[ind] = (did, name)
-                    resolution_paths[ind] = "path_c_retry"
-                    logger.info("[IND_MAPPING] Re-resolve Path C: '%s' → %s (%s)", ind, did, name)
+                resolved_map[ind] = (did, name)
+                resolution_paths[ind] = "path_c_retry"
+                logger.info("[IND_MAPPING] Re-resolve Path C: '%s' → %s (%s)", ind, did, name)
 
     re_resolved_count = len(resolved_map)
     total = len(rejected_indications)
@@ -1691,13 +1573,12 @@ def run_indication_mapping(
        LLM-suggested OT name when available) for any remaining, then
        Path C (Gemini + Google Search grounding, with OT API verification
        to reject hallucinated IDs) for anything still unresolved.
-    6. Validate every resolved mapping with over-specificity detection
-       AND a dedicated Gemini QC pass (fail-closed: API errors reject the
-       batch rather than accepting), nulling out matches that are
-       over-specific subtypes or word-overlap false positives.
+    6. Validate every resolved mapping with a dedicated Gemini QC pass
+       (fail-closed: API errors reject the batch rather than accepting),
+       nulling out matches that are word-overlap false positives.
     6.5 Re-resolution fallback: indications rejected by validation are
         re-attempted via Path B (targeted search) and Path C (search
-        grounding) to find a better, broader match.
+        grounding) to find a correct match.
     7. Push ONLY correctly resolved mappings to ``OT_DISEASE_TABLE`` —
        null/unresolved mappings are NOT pushed, so the table contains
        only verified matches. Unresolved indications will be re-attempted
@@ -1871,8 +1752,7 @@ def run_indication_mapping(
 
     # Step 6: Validate every resolved mapping (Path A, B, and C alike) —
     # rejects word-overlap false positives (e.g. "renal impairment" ->
-    # "renal carcinoma") AND over-specific matches (e.g. "dyslipidemia" ->
-    # "syndromic dyslipidemia") rather than storing wrong matches.
+    # "renal carcinoma") rather than storing wrong matches.
     # Fail-CLOSED: API errors reject the batch rather than accepting.
     pre_validation_resolved = {
         ind: (did, name) for ind, (did, name) in resolved_map.items() if did and name
@@ -1883,7 +1763,7 @@ def run_indication_mapping(
     # resolved but then REJECTED by validation, and re-attempt them via
     # Path B (targeted search) and Path C (search grounding). This
     # recovers mappings that were rejected because Path A found an
-    # over-specific or false-positive match, but a better match exists.
+    # false-positive match, but a better match exists.
     rejected_by_validation = [
         ind for ind in canonical_reps
         if ind in pre_validation_resolved  # was resolved before validation
