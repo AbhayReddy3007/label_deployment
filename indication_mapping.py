@@ -417,6 +417,49 @@ def _is_disease_hit(name: str | None) -> bool:
     return not any(prefix in lower for prefix in _MEASUREMENT_PREFIXES)
 
 
+def _ot_search_all_candidates(name: str) -> list[tuple[str, str]]:
+    """Search OT and return ALL valid disease candidates (id, name) for scoring.
+
+    Unlike ``ot_search_disease`` which picks the single best match, this
+    returns every candidate so callers can apply their own matching logic
+    (e.g. exact-name matching in the direct search step).
+    """
+    graphql = f"""
+    query SearchDisease($q: String!) {{
+      search(queryString: $q, entityNames: ["disease"], page: {{index: 0, size: {_OT_SEARCH_PAGE_SIZE}}}) {{
+        hits {{
+          id
+          object {{ ... on Disease {{ name }} }}
+        }}
+      }}
+    }}
+    """
+    search_queries = [name]
+    name_lower = name.lower()
+    american = _to_american(name)
+    if american.lower() != name_lower:
+        search_queries.append(american)
+    if "emia" in name_lower:
+        search_queries.append(re.sub(r"emia\b", "aemia", name, flags=re.IGNORECASE))
+    elif "aemia" in name_lower:
+        search_queries.append(re.sub(r"aemia\b", "emia", name, flags=re.IGNORECASE))
+    if len(name.split()) == 1 and not name.startswith('"'):
+        search_queries.append(f'"{name}"')
+
+    all_candidates: list[tuple[str, str]] = []
+    seen_ids: set[str] = set()
+    for sq in search_queries:
+        data = _ot_post_with_retry(graphql, {"q": sq}, context=f"disease-search:{sq}")
+        if data:
+            for h in data.get("search", {}).get("hits", []):
+                hid = h["id"]
+                if hid not in seen_ids:
+                    seen_ids.add(hid)
+                    all_candidates.append((hid, h["object"].get("name", "")))
+
+    return [(cid, cname) for cid, cname in all_candidates if _is_valid_disease_id(cid)]
+
+
 def ot_search_disease(name: str) -> tuple[str | None, str | None]:
     """Search OT for a disease by name. Returns ``(disease_id, disease_name)``.
 
@@ -646,7 +689,10 @@ def fetch_all_target_diseases(
     seen: set[str] = set()
     all_diseases: list[tuple[str, str]] = []
 
-    for tid in target_ids:
+    # Deduplicate target IDs to avoid fetching the same target twice
+    deduped_targets = list(dict.fromkeys(tid for tid in target_ids if tid))
+
+    for tid in deduped_targets:
         if not tid:
             continue
         page_index = 0
@@ -684,7 +730,7 @@ def fetch_all_target_diseases(
 
     logger.info(
         "[IND_MAPPING] Fetched %d unique diseases across %d target(s)",
-        len(all_diseases), len(target_ids),
+        len(all_diseases), len(deduped_targets),
     )
     return all_diseases
 
@@ -1478,26 +1524,65 @@ def validate_resolved_mappings(
 # ==============================
 # POST-VALIDATION RE-RESOLUTION FALLBACK
 # ==============================
+def _extract_core_disease_noun(indication: str) -> str | None:
+    """Extract the core disease noun from a compound indication.
+
+    E.g. "Hypothalamic obesity" → "obesity",
+         "Childhood obesity" → "obesity",
+         "Antipsychotic-induced weight gain" → "weight gain".
+
+    Returns ``None`` if the indication is already a single word or
+    no clear core noun can be extracted.
+    """
+    words = indication.strip().split()
+    if len(words) <= 1:
+        return None
+    # Common disease nouns that are likely the core term
+    _CORE_NOUNS = {
+        "obesity", "cancer", "diabetes", "hypertension", "failure",
+        "disease", "disorder", "syndrome", "infection", "carcinoma",
+        "lymphoma", "leukemia", "leukaemia", "anemia", "anaemia",
+        "neuropathy", "nephropathy", "retinopathy", "apnea", "apnoea",
+        "fibrosis", "sclerosis", "arthritis", "hepatitis", "colitis",
+        "dermatitis", "asthma", "epilepsy", "psoriasis", "eczema",
+        "osteoporosis", "cirrhosis", "pancreatitis", "pneumonia",
+    }
+    # Try progressively shorter suffixes: last 1 word, last 2 words, etc.
+    for n in range(1, len(words)):
+        suffix = " ".join(words[n:]).lower()
+        if suffix in _CORE_NOUNS or any(suffix.endswith(noun) for noun in _CORE_NOUNS):
+            core = " ".join(words[n:])
+            if core.lower() != indication.lower():
+                return core
+    return None
+
+
 def _re_resolve_rejected(
     rejected_indications: list[str],
     canonical_hint_map: dict[str, str],
+    rejected_disease_ids: dict[str, str] | None = None,
 ) -> tuple[dict[str, tuple[str | None, str | None]], dict[str, str]]:
     """Re-attempt resolution for indications whose initial match was
     rejected by validation (false positive).
 
     Uses a more targeted approach:
     1. First tries Path B (OT text search) with the raw indication text —
-       the initial match may have come from Path A which matched against
-       a disease list, while Path B does a direct text search that may
-       find a better (broader) match.
+       skipping any disease ID that was already rejected. If the search
+       returns the same bad match, tries a broader search using the core
+       disease noun (e.g. "obesity" from "Hypothalamic obesity").
     2. For anything still unresolved, tries Path C (Gemini + Google Search
        grounding with OT API verification).
+
+    ``rejected_disease_ids`` maps indication → the disease ID that was
+    rejected, so re-resolution can avoid returning the same bad match.
 
     Returns ``(resolved_map, resolution_paths)`` — same format as the
     main pipeline uses.
     """
     if not rejected_indications:
         return {}, {}
+    if rejected_disease_ids is None:
+        rejected_disease_ids = {}
 
     logger.info(
         "[IND_MAPPING] Re-resolution fallback: attempting %d rejected indication(s)",
@@ -1507,15 +1592,30 @@ def _re_resolve_rejected(
     resolved_map: dict[str, tuple[str | None, str | None]] = {}
     resolution_paths: dict[str, str] = {}
 
-    # Round 1: Path B — targeted OT text search
+    # Round 1: Path B — targeted OT text search, avoiding the rejected ID
     still_unresolved = []
     with ThreadPoolExecutor(
         max_workers=min(_WORKERS, len(rejected_indications)),
         thread_name_prefix="re-resolve",
     ) as exe:
         def _resolve_one(ind: str) -> tuple[str, str | None, str | None]:
+            bad_id = rejected_disease_ids.get(ind)
+
+            # Try the standard search first
             did, name = _resolve_via_ot_search(ind, llm_ot_name=canonical_hint_map.get(ind))
-            return ind, did, name
+            if did and did != bad_id:
+                return ind, did, name
+
+            # Same bad match came back — try the core disease noun
+            # e.g. "Hypothalamic obesity" → search for "obesity"
+            core = _extract_core_disease_noun(ind)
+            if core:
+                logger.info("[IND_MAPPING] Re-resolve: trying core noun '%s' for '%s'", core, ind)
+                did2, name2 = _resolve_via_ot_search(core, llm_ot_name=None)
+                if did2 and did2 != bad_id:
+                    return ind, did2, name2
+
+            return ind, None, None
 
         futures = {exe.submit(_resolve_one, ind): ind for ind in rejected_indications}
         for fut in as_completed(futures):
@@ -1535,7 +1635,8 @@ def _re_resolve_rejected(
         )
         path_c_results = resolve_via_search_grounding(still_unresolved)
         for ind, (did, name) in path_c_results.items():
-            if did and name:
+            bad_id = rejected_disease_ids.get(ind)
+            if did and name and did != bad_id:
                 resolved_map[ind] = (did, name)
                 resolution_paths[ind] = "path_c_retry"
                 logger.info("[IND_MAPPING] Re-resolve Path C: '%s' → %s (%s)", ind, did, name)
@@ -1700,22 +1801,28 @@ def run_indication_mapping(
         ind_lower = ind.lower().strip()
         ind_american = _to_american(ind_lower)
 
-        # Search OT with the indication text itself
-        did, name = ot_search_disease(ind)
-        if did and name:
-            name_lower = name.lower().strip()
-            if name_lower == ind_lower or _to_american(name_lower) == ind_american:
-                return ind, did, name
+        def _exact_in(candidates: list[tuple[str, str]]) -> tuple[str | None, str | None]:
+            """Return the first candidate whose name is an exact match."""
+            for cid, cname in candidates:
+                cname_lower = (cname or "").lower().strip()
+                if cname_lower == ind_lower or _to_american(cname_lower) == ind_american:
+                    return cid, cname
+            return None, None
+
+        # Search OT with the indication text itself — scan ALL candidates
+        candidates = _ot_search_all_candidates(ind)
+        did, name = _exact_in(candidates)
+        if did:
+            return ind, did, name
 
         # Also try with the LLM hint (searches OT with the hint, but still
         # checks the RETURNED name against the original indication)
         hint = canonical_hint_map.get(ind)
         if hint:
-            did2, name2 = ot_search_disease(hint)
-            if did2 and name2:
-                name2_lower = name2.lower().strip()
-                if name2_lower == ind_lower or _to_american(name2_lower) == ind_american:
-                    return ind, did2, name2
+            candidates2 = _ot_search_all_candidates(hint)
+            did2, name2 = _exact_in(candidates2)
+            if did2:
+                return ind, did2, name2
 
         return ind, None, None
 
@@ -1821,12 +1928,21 @@ def run_indication_mapping(
         if ind in pre_validation_resolved  # was resolved before validation
         and not resolved_map.get(ind, (None, None))[0]  # now null after validation
     ]
+    # Build a map of indication → rejected disease ID so re-resolution
+    # can avoid returning the same false-positive match
+    rejected_disease_ids = {
+        ind: pre_validation_resolved[ind][0]
+        for ind in rejected_by_validation
+        if pre_validation_resolved[ind][0]
+    }
     if rejected_by_validation:
         logger.info(
             "[IND_MAPPING] %d mapping(s) rejected by validation — attempting re-resolution",
             len(rejected_by_validation),
         )
-        re_resolved, re_paths = _re_resolve_rejected(rejected_by_validation, canonical_hint_map)
+        re_resolved, re_paths = _re_resolve_rejected(
+            rejected_by_validation, canonical_hint_map, rejected_disease_ids
+        )
 
         # Validate the re-resolved mappings too (same QC standard)
         if re_resolved:
