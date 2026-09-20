@@ -1,55 +1,127 @@
-[INFO] [SCORE_CALC] Completed for 'Tirzepatide'. Final Score = 3.0681
-[ERROR] [LABEL_EXPANSION] Step 6 failed for 'Tirzepatide'
-Traceback (most recent call last):
-  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\label_expansion_opportunity.py", line 301, in label_expansion
-    score_rows = run_score_calculation(drug_name=drug_name, push=True, secondary_only=True)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\scoring\score_calculator.py", line 554, in run_score_calculation
-    push_score_calculation(result_rows)
-  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\bq_utils.py", line 447, in push_score_calculation
-    bq_client.query(delete_query, job_config=job_config).result()
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\job\query.py", line 1773, in result
-    while not is_job_done():
-              ^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 294, in retry_wrapped_func
-    return retry_target(
-           ^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 156, in retry_target
-    next_sleep = _retry_error_helper(
-                 ^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_base.py", line 214, in _retry_error_helper
-    raise final_exc from source_exc
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 147, in retry_target
-    result = target()
-             ^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\job\query.py", line 1742, in is_job_done
-    self._reload_query_results(retry=retry, **reload_query_results_kwargs)
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\job\query.py", line 1534, in _reload_query_results
-    self._query_results = self._client._get_query_results(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\client.py", line 2113, in _get_query_results
-    resource = self._call_api(
-               ^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\client.py", line 861, in _call_api
-    return call()
-           ^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 294, in retry_wrapped_func
-    return retry_target(
-           ^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 156, in retry_target
-    next_sleep = _retry_error_helper(
-                 ^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_base.py", line 214, in _retry_error_helper
-    raise final_exc from source_exc
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 147, in retry_target
-    result = target()
-             ^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\_http\__init__.py", line 494, in api_request
-    raise exceptions.from_http_response(response)
-google.api_core.exceptions.BadRequest: 400 GET https://bigquery.googleapis.com/bigquery/v2/projects/cognito-dev-380506/queries/f86b0543-62b9-4084-abae-3db318c87335?maxResults=0&location=asia-south1&prettyPrint=false: UPDATE or DELETE statement over table cognito-dev-380506.data_mart.label_expansion_score_recalculation would affect rows in the streaming buffer, which is not supported
+prompt = f"""You are a senior business analyst preparing a detailed analytical report 
+on the label expansion dimension of the pharmaceutical molecule "{molecule_name}" 
+for senior business decision-makers.
 
-Location: asia-south1
-Job ID: f86b0543-62b9-4084-abae-3db318c87335
+This dimension evaluates the breadth and depth of the drug's indication landscape — 
+how many distinct indications it is approved for or being studied in, whether it has 
+expanded beyond its primary use, how many therapy areas it spans, and what this means 
+for the drug's commercial and strategic potential.
 
-[INFO] [LABEL_EXPANSION] Step 7: Skipped — no score rows to report on
-[INFO] [LABEL_EXPANSION] Pipeline complete for 'Tirzepatide': 898 indication row(s), 3 MOA mapping(s), 0 indication mapping(s), 0 score row(s)
+YOUR OUTPUT MUST FOLLOW THIS EXACT STRUCTURE (use these exact headings):
+
+## HEADLINE
+Write ONE impactful sentence summarizing the overall business implication of the 
+label expansion landscape for this molecule. This should be the single most important 
+takeaway a decision-maker needs.
+
+## INDICATION LANDSCAPE
+Write 3-5 sentences providing the quantitative context a decision-maker needs. 
+Cover: how many distinct indications exist (primary vs. secondary/expansion), 
+how many therapy areas the drug spans, what the primary indication(s) are and 
+what expansion indications are being pursued, what data sources corroborate the 
+findings (clinical trials, regulatory labels, investor materials, SEC filings), 
+and the phase maturity of indication-level evidence. Cite specific numbers from 
+the data. This section sets the stage — it should tell the reader the size and 
+shape of the indication portfolio before diving into insights.
+
+## KEY INSIGHTS
+
+Provide 4-6 key insights. For EACH insight, write EXACTLY two lines using this format:
+Line 1: "Insight: " followed by a short, specific finding (ONE sentence, max 20 words).
+         This is the bold headline of the insight.
+Line 2: "Why it matters: " followed by the business implication (2-3 sentences, 
+         ~40-60 words). This is the explanatory body text.
+
+IMPORTANT: You MUST use exactly the labels "Insight: " and "Why it matters: " — 
+these labels are required for formatting.
+
+Example format:
+Insight: Drug spans 4 therapy areas beyond its original metabolic indication.
+Why it matters: Multi-therapy-area reach transforms the commercial model from a single-franchise asset to a platform molecule. Each new therapy area unlocks distinct prescriber networks, payer segments, and revenue pools — compounding lifecycle value.
+
+Insight: 3 secondary indications are already in Phase 3, signaling near-term label expansion.
+Why it matters: Phase 3 secondary indications with active enrollment represent 12-24 month catalysts for label expansion. Successful readouts would broaden the addressable market and strengthen payer negotiation leverage with real-world evidence of multi-indication utility.
+
+Be specific. Reference indication counts, therapy area breadth, primary vs. secondary 
+classification, geographic reach, or data source corroboration. Do NOT write generic 
+statements like "the label is expanding" without concrete data.
+
+Prioritize insights that address:
+1. Breadth of indication portfolio and what it enables (platform potential, lifecycle value)
+2. Therapy area diversification and cross-specialty commercial opportunity
+3. Regulatory label status — approved indications vs. investigational expansions
+4. Quality and variety of evidence sources (clinical trials, regulatory filings, investor disclosures)
+5. Label expansion gaps that create risk or delay
+6. Pipeline maturity of secondary indications (how close to approval)
+
+## EXPANSION INDICATIONS
+For EACH secondary (expansion) indication listed in the data below, write EXACTLY 
+two lines using this format:
+Line 1: "Indication: " followed by the indication name and its therapy area in parentheses.
+Line 2: "Rationale: " followed by 1-2 sentences explaining WHY this is classified as 
+         a secondary/expansion indication — i.e., what makes it distinct from the primary 
+         label, what evidence supports it, and its current development status. Use the 
+         rationale data provided but rewrite it in clear business language.
+
+IMPORTANT: You MUST use exactly the labels "Indication: " and "Rationale: " — 
+these labels are required for formatting. Cover ALL secondary indications listed.
+
+## EVIDENCE GAPS & RISKS
+Write 3-5 bullet points (each starting with "- ") identifying the most material 
+gaps in the label expansion profile and the business risk each creates. Focus ONLY 
+on indication and expansion gaps — for example, missing indications in large 
+addressable markets, limited expansion beyond primary therapy area, over-reliance 
+on a single indication for revenue, absence of real-world evidence for newer 
+indications, or lack of confirmatory data for pipeline expansions.
+CRITICAL: Do NOT mention peer-reviewed journals, publications, published literature, 
+academic publishing, or the need for more published studies. These are NOT relevant 
+gaps for this report. Every gap must be about missing DATA or missing INDICATIONS.
+
+## BOTTOM LINE
+Write 3-4 sentences stating what a decision-maker should infer from this dimension. 
+Be direct and actionable — state whether the label expansion profile supports 
+investment, partnership, or market entry decisions, and flag any conditions or 
+watchpoints. Focus on the strategic value of the indication breadth.
+
+STRICT RULES:
+- Total length: 700-1000 words (the report should comfortably fill ~2 pages)
+- NO technical jargon (no "Ep", "Et", "scoring", "model", "pipeline page API", 
+  "BigQuery", "ClinicalTrials.gov API", "Gemini", "LLM")
+- Do NOT mention scores of any kind — no Ep, Et, numerical scores, or scoring methodology
+- Do NOT mention peer-reviewed journals, publications, or academic publishing anywhere
+- You MUST use "Insight: " and "Why it matters: " labels exactly in KEY INSIGHTS
+- Every statement must add insight or implication — no restating obvious facts
+- Use clear, natural business language that a non-scientific executive can follow
+- Do not use markdown bold (**text**) — use plain text only
+- Reference specific numbers, indication counts, and therapy areas wherever possible
+- Keep paragraphs short (2-4 sentences max)
+
+DATA FOR YOUR ANALYSIS:
+======================
+
+Molecule: {molecule_name}
+Company: {data['company_name'] or 'Unknown'}
+
+Total Unique Indications: {data['total_indications']}
+Primary Indications: {primary_list}
+Secondary (Expansion) Indications: {secondary_list}
+Number of Therapy Areas: {len(data['therapy_areas'])}
+Therapy Areas: {ta_list}
+Total Trials / Sources: {data['total_trials']}
+Data Sources: {sources_list}
+Has Regulatory Label Data: {'Yes' if data['has_regulatory_label'] else 'No'}
+
+Phase Distribution: {json.dumps(data['phase_distribution'])}
+
+Secondary Indication Details (with rationale for each):
+{chr(10).join(secondary_rationale_lines) if secondary_rationale_lines else 'No secondary indications identified'}
+
+Indication Details (first 30):
+{chr(10).join(indication_lines) if indication_lines else 'No indication details available'}
+
+Now write the report. Remember: business language, specific numbers, no jargon, 
+no scores, 700-1000 words. 
+CRITICAL: In KEY INSIGHTS, every insight headline MUST start with "Insight: " 
+and every body line MUST start with "Why it matters: "."""
+
+    return prompt
