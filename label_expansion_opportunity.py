@@ -323,7 +323,7 @@ def label_expansion(
                 upload_report_pdf,
             )
 
-            report_data = {"drug_name": drug_name, "score_rows": score_rows}
+            report_data = {"drug_name": drug_name, "score_rows": score_rows, "merged_rows": merged_rows}
             rationale, rationale_payload = generate_label_expansion_rationale(report_data)
             pdf_bytes, report_content, report_payload = generate_label_expansion_report_bytes(report_data)
             logger.info(
