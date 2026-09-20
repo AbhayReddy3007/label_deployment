@@ -1,47 +1,55 @@
-[INFO] [IND_MAPPING] Starting indication mapping for 'Tirzepatide'
-[INFO] [IND_MAPPING] Fetched 87 Secondary indication(s) for 'Tirzepatide' from glp_indications_table
-[INFO] [IND_MAPPING] 87 indication(s) total, 60 already resolved (non-null), 27 to resolve (new + previously null)
-[INFO] [IND_MAPPING] Clustering 22 indication(s) in 1 chunk(s) of up to 60
-[INFO] [IND_MAPPING] Clustering collapsed 22 indication(s) into 22 canonical cluster(s)
-[INFO] [IND_MAPPING] Direct OT search: checking 22 indication(s) for exact matches
-[INFO] [IND_MAPPING] Direct exact match: 'Breast Cancer' → MONDO_0007254 (breast cancer)
-[INFO] [IND_MAPPING] Direct exact match: 'Cancer' → MONDO_0004992 (cancer)
-[INFO] [IND_MAPPING] Direct OT search: 2/22 exact match(es), 20 remaining for Path A
-[INFO] [IND_MAPPING] Path A: Fetching OT diseases for 3 target(s)
-[INFO] [IND_MAPPING] Target ENSG00000112164: 1187 associated diseases in OT
-[INFO] [IND_MAPPING] Target ENSG00000010310: 298 associated diseases in OT
-[INFO] [IND_MAPPING] Target ENSG00000112164: 1187 associated diseases in OT
-[INFO] [IND_MAPPING] Fetched 1014 unique diseases across 3 target(s)
-[INFO] [IND_MAPPING] Gemini matching: 20 indication(s) × 1014 diseases → 11 disease chunk(s), indication batches of 15
-[INFO] [IND_MAPPING] Gemini best: 'Childhood obesity' → MONDO_0011122 (obesity disorder) [score=157.0]
-[INFO] [IND_MAPPING] Gemini best: 'End-stage renal disease' → MONDO_0024327 (chronic renal failure syndrome) [score=155.0]
-[INFO] [IND_MAPPING] Gemini best: 'Facial Skin Laxity' → EFO_0005422 (skin aging) [score=155.0]
-[INFO] [IND_MAPPING] Gemini best: 'HIV Infections' → EFO_0000544 (infection) [score=149.0]
-[INFO] [IND_MAPPING] Gemini best: 'Heart failure with preserved ejection fraction' → MONDO_0005009 (congestive heart failure) [score=157.0]
-[INFO] [IND_MAPPING] Gemini best: 'Hypertension' → MONDO_0001134 (essential hypertension) [score=155.0]
-[INFO] [IND_MAPPING] Gemini best: 'Methamphetamine Use Disorder' → MONDO_0002025 (psychiatric disorder) [score=149.0]
-[INFO] [IND_MAPPING] Gemini best: 'Hirsutism' → EFO_0009006 (hyperandrogenism) [score=147.0]
-[INFO] [IND_MAPPING] Gemini best: 'Pre-diabetes' → MONDO_0002908 (glucose metabolism disease) [score=143.0]
-[INFO] [IND_MAPPING] Gemini best: 'Obstructive sleep apnea' → MONDO_0005296 (sleep apnea syndrome) [score=165.0]
-[INFO] [IND_MAPPING] Gemini best: 'Sarcopenic Obesity' → EFO_1000653 (sarcopenia) [score=147.0]
-[INFO] [IND_MAPPING] Gemini best: 'Renal impairment' → MONDO_0024327 (chronic renal failure syndrome) [score=155.0]
-[INFO] [IND_MAPPING] Gemini best: 'Schizophrenia-spectrum disorders' → MONDO_0005090 (schizophrenia) [score=158.0]
-[INFO] [IND_MAPPING] Gemini best: 'Type 1 Diabetes' → MONDO_0005147 (type 1 diabetes mellitus) [score=157.0]
-[INFO] [IND_MAPPING] Gemini best: 'Stroke' → MONDO_0005098 (stroke disorder) [score=157.0]
-[INFO] [IND_MAPPING] Gemini matched 15/20 indication(s) across 11 disease chunk(s)
-[INFO] [IND_MAPPING] 5 indication(s) unmatched by Gemini — falling back to OT text search
-[INFO] [IND_MAPPING] Path B: OT text search for 5 indication(s)
-[INFO] [IND_MAPPING] OT search: 'Antipsychotic-induced weight gain' → EFO_0004567 (antipsychotic drug related weight gain)
-[INFO] [IND_MAPPING] OT search: 'Dry eye disease' → MONDO_0006733 (dry eye syndrome)
-[INFO] [IND_MAPPING] OT search: 'Chronic High Bowel Frequency' → MONDO_0044889 (high grade B-cell lymphoma)
-[INFO] [IND_MAPPING] OT search: 'Endometrial Hyperplasia' → MONDO_0006096 (atypical endometrial hyperplasia)
-[INFO] [IND_MAPPING] OT search: 'Hypothalamic obesity' → MONDO_0006799 (hypothalamic neoplasm)
-[INFO] [IND_MAPPING] Validating 22 resolved mapping(s)
-[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Hypothalamic obesity' -> 'hypothalamic neoplasm' (MONDO_0006799)
-[INFO] [IND_MAPPING] Validation rejected 1/22 resolved mapping(s)
-[INFO] [IND_MAPPING] 1 mapping(s) rejected by validation — attempting re-resolution
-[INFO] [IND_MAPPING] Re-resolution fallback: attempting 1 rejected indication(s)
-[INFO] [IND_MAPPING] Re-resolve Path B: 'Hypothalamic obesity' → MONDO_0006799 (hypothalamic neoplasm)
-[INFO] [IND_MAPPING] Re-resolution fallback: recovered 1/1 rejected indication(s)
-[INFO] [IND_MAPPING] Validating 1 resolved mapping(s)
-[WARNING] [IND_MAPPING] Rejected low-confidence match: 'Hypothalamic obesity' -> 'hypothalamic neoplasm' (MONDO_0006799)
+[INFO] [SCORE_CALC] Completed for 'Tirzepatide'. Final Score = 3.0681
+[ERROR] [LABEL_EXPANSION] Step 6 failed for 'Tirzepatide'
+Traceback (most recent call last):
+  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\label_expansion_opportunity.py", line 301, in label_expansion
+    score_rows = run_score_calculation(drug_name=drug_name, push=True, secondary_only=True)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\scoring\score_calculator.py", line 554, in run_score_calculation
+    push_score_calculation(result_rows)
+  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\bq_utils.py", line 447, in push_score_calculation
+    bq_client.query(delete_query, job_config=job_config).result()
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\job\query.py", line 1773, in result
+    while not is_job_done():
+              ^^^^^^^^^^^^^
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 294, in retry_wrapped_func
+    return retry_target(
+           ^^^^^^^^^^^^^
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 156, in retry_target
+    next_sleep = _retry_error_helper(
+                 ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_base.py", line 214, in _retry_error_helper
+    raise final_exc from source_exc
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 147, in retry_target
+    result = target()
+             ^^^^^^^^
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\job\query.py", line 1742, in is_job_done
+    self._reload_query_results(retry=retry, **reload_query_results_kwargs)
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\job\query.py", line 1534, in _reload_query_results
+    self._query_results = self._client._get_query_results(
+                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\client.py", line 2113, in _get_query_results
+    resource = self._call_api(
+               ^^^^^^^^^^^^^^^
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\client.py", line 861, in _call_api
+    return call()
+           ^^^^^^
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 294, in retry_wrapped_func
+    return retry_target(
+           ^^^^^^^^^^^^^
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 156, in retry_target
+    next_sleep = _retry_error_helper(
+                 ^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_base.py", line 214, in _retry_error_helper
+    raise final_exc from source_exc
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 147, in retry_target
+    result = target()
+             ^^^^^^^^
+  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\_http\__init__.py", line 494, in api_request
+    raise exceptions.from_http_response(response)
+google.api_core.exceptions.BadRequest: 400 GET https://bigquery.googleapis.com/bigquery/v2/projects/cognito-dev-380506/queries/f86b0543-62b9-4084-abae-3db318c87335?maxResults=0&location=asia-south1&prettyPrint=false: UPDATE or DELETE statement over table cognito-dev-380506.data_mart.label_expansion_score_recalculation would affect rows in the streaming buffer, which is not supported
+
+Location: asia-south1
+Job ID: f86b0543-62b9-4084-abae-3db318c87335
+
+[INFO] [LABEL_EXPANSION] Step 7: Skipped — no score rows to report on
+[INFO] [LABEL_EXPANSION] Pipeline complete for 'Tirzepatide': 898 indication row(s), 3 MOA mapping(s), 0 indication mapping(s), 0 score row(s)
