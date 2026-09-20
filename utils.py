@@ -68,6 +68,11 @@ gemini_client = genai.Client(api_key=GEMINI_API_KEY)
 
 GEMINI_MAX_RETRIES = 4
 GEMINI_BASE_DELAY_SECONDS = 5
+# On an empty (non-erroring) response, retry the SAME config this many
+# times in total before giving up on it (2 = one retry, as instructed).
+# Bounded well under GEMINI_MAX_RETRIES since transient-error backoff and
+# empty-response retry are different concerns with different costs.
+GEMINI_EMPTY_RETRY_ATTEMPTS = 2
 
 
 def _safe_response_text(resp) -> str:
@@ -119,11 +124,15 @@ def gemini_generate(
 ) -> str:
     """Calls Gemini with optional Google Search grounding.
 
-    Retries transient errors with exponential backoff. If search grounding
-    returns nothing (or fails), falls back to a plain (non-grounded) call —
-    unless ``allow_ungrounded_fallback`` is False, in which case an
-    empty/failed grounded response is left empty rather than retried
-    without grounding.
+    Retries transient errors with exponential backoff. An empty (but
+    non-erroring) response is retried once more with the SAME config
+    before moving on - e.g. an empty grounded response is retried with
+    grounding still in place, not immediately treated as failed or
+    switched to a different config. Only after that retry is also empty
+    does this move to the next config (falling back to a plain,
+    non-grounded call) - unless ``allow_ungrounded_fallback`` is False,
+    in which case an empty/failed grounded response is left empty rather
+    than retried without grounding.
     """
     configs = []
     if use_search:
@@ -144,6 +153,7 @@ def gemini_generate(
 
     last_err: Exception | None = None
     for i, cfg in enumerate(configs):
+        config_label = "Search grounding" if i == 0 and use_search else "config"
         for attempt in range(GEMINI_MAX_RETRIES):
             try:
                 resp = gemini_client.models.generate_content(
@@ -153,7 +163,15 @@ def gemini_generate(
                 text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
                 if text:
                     return text
-                break  # empty response — try next config (if any)
+                # Empty (non-erroring) response - retry the SAME config
+                # once before giving up on it.
+                if attempt < GEMINI_EMPTY_RETRY_ATTEMPTS - 1:
+                    logger.warning(
+                        "[UTILS] Empty response with %s (attempt %d/%d) — retrying same config",
+                        config_label, attempt + 1, GEMINI_EMPTY_RETRY_ATTEMPTS,
+                    )
+                    continue
+                break  # empty-response retries exhausted — try next config (if any)
             except Exception as exc:
                 last_err = exc
                 if _is_transient(exc) and attempt < GEMINI_MAX_RETRIES - 1:
