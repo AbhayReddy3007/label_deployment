@@ -1,5 +1,6 @@
 """Label Expansion Opportunity PDF report generator.
 
+Mirrors ``serious_safety_profile``'s ``ssp_report.py`` pattern:
 - Uses prompt-based section extraction (LLM), with a deterministic fallback
   if the LLM output is unavailable or incomplete.
 - Keeps PDF rendering simple and readable (reportlab, bold section titles,
@@ -15,6 +16,7 @@ a ranked list rather than a single score.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date
 from io import BytesIO
 from typing import Any
@@ -26,12 +28,26 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
 from reportlab.platypus import HRFlowable, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from google.cloud import storage
+
+from medical_potential.config import (
+    GCS_BUCKET,
+    GCS_PIPELINE_CACHE_BASE_PATH,
+    GCS_REPORT_BASE_PATH,
+)
+
 from ..indication_extractor.utils import extract_json, gemini_generate
+
+logger = logging.getLogger(__name__)
 
 NAVY = colors.HexColor("#1F3864")
 BLUE = colors.HexColor("#2E75B6")
 GREY = colors.HexColor("#666666")
 DARK_TEXT = colors.HexColor("#1A1A2E")
+
+# This pillar's name, used as the last path segment under both GCS base
+# paths: {BASE_PATH}/{drug_name}/{PILLAR_NAME}/...
+PILLAR_NAME = "label_expansion_opportunity"
 
 SECTION_ORDER = [
     "label_expansion_landscape",
@@ -50,6 +66,57 @@ SECTION_TITLES = {
 # How many of the drug's highest-scoring opportunities to send to the LLM
 # and show in the report - keeps the prompt (and the report) readable.
 _TOP_N_OPPORTUNITIES = 15
+
+
+# ==============================
+# GCS UPLOAD
+# ==============================
+_storage_client: storage.Client | None = None
+
+
+def _get_storage_client() -> storage.Client:
+    """Lazily creates a single shared ``storage.Client`` for this process."""
+    global _storage_client
+    if _storage_client is None:
+        _storage_client = storage.Client()
+    return _storage_client
+
+
+def _upload_bytes(blob_path: str, data: bytes, content_type: str) -> str:
+    """Uploads raw bytes to ``gs://{GCS_BUCKET}/{blob_path}``. Returns the
+    ``gs://`` URI of the uploaded object. Overwrites any existing object at
+    that path."""
+    client = _get_storage_client()
+    bucket = client.bucket(GCS_BUCKET)
+    blob = bucket.blob(blob_path)
+    blob.upload_from_string(data, content_type=content_type)
+    uri = f"gs://{GCS_BUCKET}/{blob_path}"
+    logger.info("[GCS_STORAGE] Uploaded %d byte(s) to %s", len(data), uri)
+    return uri
+
+
+def upload_report_pdf(drug_name: str, pdf_bytes: bytes, filename: str = "report.pdf") -> str:
+    """Uploads a PDF report to
+    ``{GCS_REPORT_BASE_PATH}/{drug_name}/{PILLAR_NAME}/{filename}``.
+
+    Returns the ``gs://`` URI of the uploaded file.
+    """
+    blob_path = f"{GCS_REPORT_BASE_PATH}/{drug_name}/{PILLAR_NAME}/{filename}"
+    return _upload_bytes(blob_path, pdf_bytes, content_type="application/pdf")
+
+
+def upload_json_payload(drug_name: str, payload: dict[str, Any], filename: str = "payload.json") -> str:
+    """Uploads a JSON payload to
+    ``{GCS_PIPELINE_CACHE_BASE_PATH}/{drug_name}/{PILLAR_NAME}/{filename}``.
+
+    Returns the ``gs://`` URI of the uploaded file. Shared by both
+    ``generate_report.py`` (its report payload/sections) and
+    ``generate_rationale.py`` (its rationale payload), so it lives here
+    rather than being duplicated in both files.
+    """
+    blob_path = f"{GCS_PIPELINE_CACHE_BASE_PATH}/{drug_name}/{PILLAR_NAME}/{filename}"
+    data = json.dumps(payload, indent=2, default=str).encode("utf-8")
+    return _upload_bytes(blob_path, data, content_type="application/json")
 
 
 def escape_html(text: str | None) -> str:
