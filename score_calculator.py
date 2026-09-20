@@ -356,12 +356,35 @@ def add_link(df: pd.DataFrame) -> pd.DataFrame:
 # 10. Link_TA
 # ===========================================================================
 def add_link_ta(df: pd.DataFrame) -> pd.DataFrame:
-    """Link_TA = mean of Link per therapy_area."""
+    """Link_TA = maturity-weighted average of Link per therapy_area.
+
+    weighted_link_ta = SUM(maturity_weight * link)
+    maturity_weight_sum = SUM(maturity_weight)
+    link_ta = weighted_link_ta / maturity_weight_sum
+
+    Falls back to an unweighted mean for a therapy_area whose rows all
+    have maturity_weight == 0 (weighted average is undefined - division
+    by zero), so a TA with no mature evidence doesn't just disappear.
+    """
     if "therapy_area" not in df.columns:
         df["link_ta"] = float("nan")
         return df
-    ta_mean = df.groupby("therapy_area", sort=False, dropna=False)["link"].mean().rename("link_ta")
-    df = df.join(ta_mean, on="therapy_area")
+
+    weighted_link = df["maturity_weight"] * df["link"]
+    weighted_sum = weighted_link.groupby(df["therapy_area"], sort=False, dropna=False).transform("sum")
+    weight_sum = df["maturity_weight"].groupby(df["therapy_area"], sort=False, dropna=False).transform("sum")
+
+    with pd.option_context("mode.use_inf_as_na", True):
+        link_ta = weighted_sum / weight_sum
+
+    # weight_sum == 0 -> undefined weighted average; fall back to the
+    # plain (unweighted) mean of link for that therapy_area.
+    zero_weight_mask = weight_sum == 0
+    if zero_weight_mask.any():
+        unweighted_mean = df.groupby("therapy_area", sort=False, dropna=False)["link"].transform("mean")
+        link_ta = link_ta.where(~zero_weight_mask, unweighted_mean)
+
+    df["link_ta"] = link_ta
     return df
 
 
