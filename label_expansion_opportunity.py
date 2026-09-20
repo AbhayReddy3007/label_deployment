@@ -62,6 +62,7 @@ def label_expansion(
     target_ensembl_ids: list[str] | None = None,
     run_ot_mapping: bool = True,
     start_from: str = "discovery",
+    generate_report: bool = True,
 ) -> dict:
     """Run the full Label Expansion Opportunity pipeline for one drug.
 
@@ -89,6 +90,14 @@ def label_expansion(
         6.  Selects the best trial per TA-I, computes trial weights and
             a composite Final Score, pushes to LE_SCORE_CALCULATION_TABLE.
 
+    **Report Generation (Step 7):**
+        7.  Generates a short plain-text rationale and a 2-page PDF report
+            summarizing the drug's label-expansion opportunities. Uploads
+            the PDF to GCS_REPORT_BASE_PATH/{drug_name}/{PILLAR_NAME}/report.pdf
+            and a combined JSON cache (rationale + report payloads/sections)
+            to GCS_PIPELINE_CACHE_BASE_PATH/{drug_name}/{PILLAR_NAME}/payload.json.
+            Runs only if score rows exist.
+
     Args:
         drug_name: The drug / molecule name (e.g. "semaglutide").
         drug_details_table: BQ table name holding drug details with
@@ -101,6 +110,9 @@ def label_expansion(
             ``OT_MOA_TABLE``.
         run_ot_mapping: Whether to run Steps 4-6. Set ``False`` to only
             discover indications without OT resolution or scoring.
+        generate_report: Whether to run Step 7 (rationale + PDF report
+            generation, then upload to GCS). Adds two Gemini calls and two
+            GCS uploads per drug on top of Steps 1-6; set ``False`` to skip.
         start_from: Which stage to start at - skips every stage before it,
             reusing whatever is already in BigQuery from a prior run
             instead of re-discovering/re-resolving it. One of:
@@ -115,11 +127,15 @@ def label_expansion(
               - ``"scoring"``: skip everything except Step 6. Assumes both
                 ``LE_TABLE`` and ``OT_DISEASE_TABLE`` are already populated
                 for this drug.
-            Invalid values raise ``ValueError``.
+            Invalid values raise ``ValueError``. Step 7 always runs last
+            (governed only by ``generate_report``), regardless of ``start_from``.
 
     Returns:
         dict with keys: ``drug_name``, ``merged_rows``, ``moa_mappings``,
-        ``indication_mappings``, ``score_rows``.
+        ``indication_mappings``, ``score_rows``, ``rationale``,
+        ``pdf_bytes``, ``report_content``, ``report_gcs_uri`` (the
+        ``gs://`` URI of the uploaded PDF, or ``None``), ``cache_gcs_uri``
+        (the ``gs://`` URI of the uploaded JSON cache, or ``None``).
     """
     if not isinstance(drug_name, str) or not drug_name.strip():
         raise TypeError(
@@ -289,6 +305,59 @@ def label_expansion(
     else:
         logger.info("[LABEL_EXPANSION] Step 6: Skipped (run_ot_mapping=False)")
 
+    # ── Step 7: Generate rationale and PDF report, upload to GCS ────────────
+    rationale = None
+    pdf_bytes = None
+    report_content = None
+    report_gcs_uri = None
+    cache_gcs_uri = None
+    if generate_report and run_ot_mapping and score_rows:
+        logger.info("[LABEL_EXPANSION] Step 7: Generate rationale and PDF report")
+        try:
+            # Local import: avoids a hard dependency on reportlab/GCS for
+            # callers who never touch report generation.
+            from .generate_report_and_rationale import (
+                generate_label_expansion_rationale,
+                generate_label_expansion_report_bytes,
+                upload_json_payload,
+                upload_report_pdf,
+            )
+
+            report_data = {"drug_name": drug_name, "score_rows": score_rows}
+            rationale, rationale_payload = generate_label_expansion_rationale(report_data)
+            pdf_bytes, report_content, report_payload = generate_label_expansion_report_bytes(report_data)
+            logger.info(
+                "[LABEL_EXPANSION] Step 7: Generated rationale (%d char(s)) and PDF (%d bytes)",
+                len(rationale or ""), len(pdf_bytes or b""),
+            )
+
+            try:
+                report_gcs_uri = upload_report_pdf(drug_name, pdf_bytes)
+                cache_gcs_uri = upload_json_payload(
+                    drug_name,
+                    {
+                        "rationale": rationale,
+                        "rationale_payload": rationale_payload,
+                        "report_content": report_content,
+                        "report_payload": report_payload,
+                    },
+                )
+                logger.info(
+                    "[LABEL_EXPANSION] Step 7 complete: report -> %s, cache -> %s",
+                    report_gcs_uri, cache_gcs_uri,
+                )
+            except Exception:
+                logger.exception(
+                    "[LABEL_EXPANSION] Step 7: GCS upload failed for '%s' (report/rationale were still generated)",
+                    drug_name,
+                )
+        except Exception:
+            logger.exception("[LABEL_EXPANSION] Step 7 failed for '%s'", drug_name)
+    elif generate_report and run_ot_mapping and not score_rows:
+        logger.info("[LABEL_EXPANSION] Step 7: Skipped — no score rows to report on")
+    else:
+        logger.info("[LABEL_EXPANSION] Step 7: Skipped (generate_report=False)")
+
     # ── Done ───────────────────────────────────────────────────────────────
     output = {
         "drug_name": drug_name,
@@ -296,6 +365,11 @@ def label_expansion(
         "moa_mappings": moa_mappings,
         "indication_mappings": indication_mappings,
         "score_rows": score_rows,
+        "rationale": rationale,
+        "pdf_bytes": pdf_bytes,
+        "report_content": report_content,
+        "report_gcs_uri": report_gcs_uri,
+        "cache_gcs_uri": cache_gcs_uri,
     }
 
     logger.info(
