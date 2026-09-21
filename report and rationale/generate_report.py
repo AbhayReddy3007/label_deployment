@@ -7,21 +7,24 @@ Mirrors ``serious_safety_profile``'s ``ssp_report.py`` pattern:
   separator lines).
 
 Structure (adapted from a business-analyst report template): a HEADLINE,
-an INDICATION LANDSCAPE paragraph, KEY INSIGHTS (Insight: / Why it
-matters:), EXPANSION INDICATIONS (Indication: / Rationale:), EVIDENCE
-GAPS & RISKS (bullets), and a BOTTOM LINE - all written in plain business
-language with no scores or technical jargon. A summary box up top shows
-therapy area count, secondary indication count, and the top Final Score.
-A final page ("How This Score Was Calculated") explains the scoring
-formula using the drug's own top-scoring opportunity as a worked example
-- this page is deliberately the one place scores/formula terms ARE shown,
-since explaining them is its entire purpose.
+an INDICATION LANDSCAPE paragraph, KEY INSIGHTS (Insight: / plain
+explanation), EXPANSION INDICATIONS (grouped by therapy area, as a
+table), EVIDENCE GAPS & RISKS (bullets), and a BOTTOM LINE - all written
+in plain business language with no scores or technical jargon. A summary
+box up top shows therapy area count, secondary indication count, and the
+top Final Score. A final set of pages ("How This Score Was Calculated")
+walks through the scoring formula step-by-step using the drug's own
+top-scoring opportunity as a worked example, plus a full table of every
+scored indication's intermediate values - this page is deliberately the
+one place scores/formula terms ARE shown, since explaining them is its
+entire purpose.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+from collections import OrderedDict
 from datetime import date
 from io import BytesIO
 from typing import Any
@@ -46,7 +49,7 @@ from medical_potential.config import BQ_DATASET_ID, LABEL_EXPANSION_OPPORTUNITY_
 from medical_potential.gcp_utils import get_bq_client
 
 from ..indication_extractor.utils import gemini_generate
-from .score_calculator import SCORING_FORMULAS, get_methodology_text
+from ..scoring.score_calculator import SCORING_FORMULAS, get_methodology_text
 
 logger = logging.getLogger(__name__)
 
@@ -871,7 +874,6 @@ def _build_expansion_indications_table(opportunities: list[dict], styles) -> lis
         return flowables
 
     # Group indications under each therapy area, preserving order
-    from collections import OrderedDict
     ta_to_indications: OrderedDict[str, list[str]] = OrderedDict()
     for o in opportunities:
         ta = o.get("therapy_area") or "N/A"
