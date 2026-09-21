@@ -19,7 +19,7 @@ Steps (numbered to match the reference):
     8.  e_i = Q_i x e_phase_i
     8d. Approved override        - e_i forced to 1.00
     9.  Link = 1 - (1 - prior) x (1 - e_i)
-    10. Link_TA                  - mean of Link per therapy_area
+    10. Link_TA                  - maturity-weighted average of Link per therapy_area
     11. L_ind / B_raw_ind / B_ind   - indication-breadth logistic curve
     12. L_TA / B_raw_TA / B_TA      - therapy-area-breadth logistic curve
     13. B = B_ind x B_TA
@@ -55,6 +55,55 @@ _E_PHASE_TABLE = {
     ("phase3", "obvious"): 0.80, ("phase3", "indirect"): 0.65, ("phase3", "novel"): 0.55,
     ("approved", "obvious"): 1.00, ("approved", "indirect"): 1.00, ("approved", "novel"): 1.00,
 }
+
+# ==============================
+# METHODOLOGY TEXT (for the report's "How This Score Was Calculated" page)
+# ==============================
+# Plain-language formula strings for each named stage, keyed the same way
+# as the corresponding score_rows column. Used only for report generation
+# (generate_report_and_rationale/generate_report.py) - not read anywhere
+# in the actual scoring computation above.
+SCORING_FORMULAS: dict[str, dict[str, str]] = {
+    "q_i": {"formula": "Q_i = w_geo x w_sample x w_dose"},
+    "e_phase_i": {"formula": "e_phase_i = lookup(trial phase, association strength bucket)"},
+    "e_i": {"formula": "e_i = Q_i x e_phase_i"},
+    "link": {"formula": "Link = 1 - (1 - Prior) x (1 - e_i)"},
+    "b_ind": {"formula": "B_ind = f(L_ind(Effective Indications)) — indication-breadth curve"},
+    "b_ta": {"formula": "B_TA = f(L_TA(Effective Therapy Areas)) — therapy-area-breadth curve"},
+    "b": {"formula": "B = B_ind x B_TA"},
+    "overall_coherence": {"formula": "Overall Coherence = maturity-weighted average of Link across all opportunities"},
+    "c": {"formula": "C = 0.1 + 0.9 x (Overall Coherence)^1.75"},
+    "final_score": {"formula": "Final Score = 1 + 4 x B x C"},
+}
+
+
+def get_methodology_text(drug_name: str) -> dict[str, str]:
+    """Plain-language intro + legend for the report's methodology page.
+    Kept next to ``SCORING_FORMULAS`` since both describe the same
+    computation this module performs, and should stay in sync with it.
+    """
+    return {
+        "intro": (
+            f"The Final Score for each candidate indication is built from three underlying "
+            f"components: how strong the known biological link is between {drug_name}'s "
+            f"mechanism and the disease (Prior), how mature and well-supported the clinical "
+            f"evidence is (Maturity and Evidence Strength), and how broad the opportunity is "
+            f"across indications and therapy areas (Breadth). These combine into Link and "
+            f"Coherence, and ultimately a single Final Score from 1 to 5, where higher scores "
+            f"reflect stronger, more mature, and broader opportunities. The calculation below "
+            f"walks through this step by step using the drug's own numbers."
+        ),
+        "legend": (
+            "Prior: strength of the known link between the drug's target and the disease. "
+            "Maturity: how advanced the supporting clinical evidence is. "
+            "Q_i: trial quality factor combining geography, sample size, and dosing confidence. "
+            "e_phase_i: evidence weight based on trial phase and association strength. "
+            "e_i: evidence strength - trial quality combined with phase weighting. "
+            "Link: association and evidence strength combined for this indication. "
+            "Breadth: credit for the number of distinct indications and therapy areas the drug spans. "
+            "Coherence: how consistently strong the evidence is across the drug's full opportunity set."
+        ),
+    }
 
 
 def _is_missing(val) -> bool:
