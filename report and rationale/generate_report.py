@@ -592,101 +592,87 @@ def _fmt(value) -> str:
 
 def _build_methodology_flowables(payload: dict[str, Any], styles) -> list:
     """A dedicated final page explaining how Final Score is calculated,
-    using the drug's top-scoring opportunity as a worked example. Unlike
-    the rest of the report, this page IS meant to reference the scoring
-    components by name - explaining them is its entire purpose."""
+    showing the actual computed values for EVERY scored indication (not
+    just one example). Unlike the rest of the report, this page IS meant
+    to reference the scoring components by name - explaining them is its
+    entire purpose."""
     flowables = [
         PageBreak(),
         Paragraph("HOW THIS SCORE WAS CALCULATED", styles["SectionHeader"]),
         Spacer(1, 8),
     ]
 
-    all_opportunities = payload.get("all_opportunities") or []
-    if not all_opportunities:
+    opportunities = payload.get("opportunities") or []
+    if not opportunities:
         flowables.append(Paragraph(
             "No scored opportunities were available to illustrate the calculation.",
             styles["BodyProse"],
         ))
         return flowables
 
-    example = all_opportunities[0]  # highest final_score
     drug_name = payload.get("drug_name", "the drug")
 
     intro = (
         f"The Final Score for each candidate indication is built from three underlying "
         f"components: how strong the known biological link is between {drug_name}'s "
-        f"mechanism and the disease (the association prior), how mature and well-supported "
-        f"the clinical evidence is (trial quality and phase), and how broad the opportunity "
-        f"is across indications and therapy areas (breadth). These combine into a single "
-        f"score from 1 to 5, where higher scores reflect stronger, more mature, and broader "
-        f"opportunities."
+        f"mechanism and the disease (Prior), how mature and well-supported the clinical "
+        f"evidence is (Maturity and Evidence Strength), and how broad the opportunity is "
+        f"across indications and therapy areas (Breadth). These combine into Link and "
+        f"Coherence, and ultimately a single Final Score from 1 to 5, where higher scores "
+        f"reflect stronger, more mature, and broader opportunities. The table below shows "
+        f"the actual calculated values behind every indication's Final Score."
     )
     flowables.append(Paragraph(escape_html(intro), styles["BodyProse"]))
     flowables.append(Spacer(1, 6))
 
-    flowables.append(Paragraph(
-        escape_html(f"Worked example: {example.get('indication', 'N/A')} ({example.get('therapy_area', 'N/A')})"),
-        ParagraphStyle("worked-example-title", parent=styles["BodyProse"], fontName="Helvetica-Bold", alignment=TA_LEFT),
-    ))
-    flowables.append(Spacer(1, 4))
+    # One row per indication, showing the calculated value at each stage.
+    table_data = [["Indication", "Prior", "Maturity", "Evidence", "Link", "Breadth", "Coherence", "Final Score"]]
+    for o in opportunities:
+        fs = o.get("final_score")
+        table_data.append([
+            o.get("indication") or "N/A",
+            _fmt(o.get("prior")),
+            _fmt(o.get("maturity_weight")),
+            _fmt(o.get("e_i")),
+            _fmt(o.get("link")),
+            _fmt(o.get("b")),
+            _fmt(o.get("c")),
+            f"{fs:.2f}" if isinstance(fs, (int, float)) else "N/A",
+        ])
 
-    steps = [
-        ("1. Association strength (prior)", example.get("prior"),
-         "How strong the known link is between the drug's target and this disease."),
-        ("2. Evidence maturity (maturity_weight)", example.get("maturity_weight"),
-         "How advanced the supporting trial(s) are - later-phase trials score higher."),
-        ("3. Trial quality factor (Q)", example.get("q_i"),
-         "Combines geographic reach, sample size, and dosing confidence of the supporting trial(s)."),
-        ("4. Evidence strength (e_i)", example.get("e_i"),
-         "Trial quality combined with how advanced the evidence is."),
-        ("5. Combined link", example.get("link"),
-         "Association strength and evidence strength combined for this indication."),
-        ("6. Therapy area link (link_ta)", example.get("link_ta"),
-         "The combined link, averaged across this indication's therapy area, weighted by evidence maturity."),
-        ("7. Indication breadth (B_ind)", example.get("b_ind"),
-         "Credit for the number of distinct indications this drug has evidence for."),
-        ("8. Therapy area breadth (B_ta)", example.get("b_ta"),
-         "Credit for the number of distinct therapy areas this drug spans."),
-        ("9. Overall breadth (B)", example.get("b"),
-         "Indication and therapy area breadth combined."),
-        ("10. Overall coherence", example.get("overall_coherence"),
-         "How consistently strong the evidence is across this drug's full opportunity set."),
-        ("11. Coherence factor (C)", example.get("c"),
-         "Overall coherence converted into a scaling factor."),
-        ("12. Final Score", example.get("final_score"),
-         "Breadth (B) combined with the coherence factor (C), scaled to a 1-5 range."),
-    ]
-
-    table_data = [["Step", "Value", "What it represents"]]
-    for label, value, desc in steps:
-        table_data.append([label, _fmt(value), desc])
-
-    tbl = Table(table_data, colWidths=[1.7 * inch, 0.7 * inch, 4.1 * inch])
+    tbl = Table(
+        table_data,
+        colWidths=[1.7 * inch, 0.65 * inch, 0.65 * inch, 0.65 * inch, 0.6 * inch, 0.65 * inch, 0.7 * inch, 0.75 * inch],
+    )
     tbl.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 8),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("FONTSIZE", (0, 0), (-1, -1), 7.5),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 1), (-1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CCCCCC")),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHT_BG]),
-        ("TOPPADDING", (0, 0), (-1, -1), 4),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-        ("LEFTPADDING", (0, 0), (-1, -1), 5),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 3.5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 3.5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
     ]))
     flowables.append(tbl)
-    flowables.append(Spacer(1, 8))
+    flowables.append(Spacer(1, 6))
 
-    final_score = example.get("final_score")
-    closing = (
-        f"This worked example resulted in a Final Score of {final_score:.2f} out of 5 "
-        f"for {example.get('indication', 'this indication')}. The same calculation is "
-        f"applied independently to every candidate indication."
-        if isinstance(final_score, (int, float)) else
-        "The same calculation is applied independently to every candidate indication."
+    legend = (
+        "Prior: strength of the known link between the drug's target and the disease. "
+        "Maturity: how advanced the supporting clinical evidence is. "
+        "Evidence: trial quality combined with maturity. "
+        "Link: association and evidence strength combined for this indication. "
+        "Breadth: credit for the number of distinct indications and therapy areas the drug spans. "
+        "Coherence: how consistently strong the evidence is across the drug's full opportunity set."
     )
-    flowables.append(Paragraph(escape_html(closing), styles["BodyProse"]))
+    flowables.append(Paragraph(
+        escape_html(legend),
+        ParagraphStyle("methodology-legend", parent=styles["BodyProse"], fontSize=8, leading=11, textColor=GREY),
+    ))
 
     return flowables
 
