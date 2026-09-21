@@ -645,71 +645,9 @@ def _build_methodology_flowables(payload: dict[str, Any], styles) -> list:
     flowables.append(Spacer(1, 4))
 
     # ------------------------------------------------------------------
-    # STAGE 2: Evidence Strength (e_i)
+    # Breadth (B)
     # ------------------------------------------------------------------
-    flowables.append(Paragraph("Stage 2: Evidence Strength (e_i)", stage_header_style))
-
-    q_i = top.get("q_i")
-    w_geo = top.get("w_geo")
-    w_dose = top.get("w_dose")
-    w_sample = top.get("w_sample")
-    e_phase_i = top.get("e_phase_i")
-    e_i = top.get("e_i")
-
-    flowables.append(Paragraph(
-        escape_html(SCORING_FORMULAS["q_i"]["formula"]),
-        formula_style,
-    ))
-    flowables.append(Paragraph(
-        f"= {_fmt(w_geo)} x {_fmt(w_sample)} x {_fmt(w_dose)} = <b>{_fmt(q_i)}</b>",
-        calc_style,
-    ))
-
-    flowables.append(Paragraph(
-        escape_html(SCORING_FORMULAS["e_phase_i"]["formula"]),
-        formula_style,
-    ))
-    flowables.append(Paragraph(
-        f"e_phase_i = <b>{_fmt(e_phase_i)}</b> "
-        f"(Phase: {escape_html(str(top.get('phase') or 'N/A'))})",
-        calc_style,
-    ))
-
-    flowables.append(Paragraph(
-        escape_html(SCORING_FORMULAS["e_i"]["formula"]),
-        formula_style,
-    ))
-    flowables.append(Paragraph(
-        f"= {_fmt(q_i)} x {_fmt(e_phase_i)} = <b>{_fmt(e_i)}</b>",
-        calc_style,
-    ))
-
-    # ------------------------------------------------------------------
-    # STAGE 3: Link
-    # ------------------------------------------------------------------
-    flowables.append(Paragraph("Stage 3: Link", stage_header_style))
-
-    prior = top.get("prior")
-    link = top.get("link")
-
-    flowables.append(Paragraph(
-        escape_html(SCORING_FORMULAS["link"]["formula"]),
-        formula_style,
-    ))
-    flowables.append(Paragraph(
-        f"= 1 - (1 - {_fmt(prior)}) x (1 - {_fmt(e_i)}) = <b>{_fmt(link)}</b>",
-        calc_style,
-    ))
-    flowables.append(Paragraph(
-        f"Prior = {_fmt(prior)} (from association score); "
-        f"e_i = {_fmt(e_i)} (evidence strength computed above)",
-        ParagraphStyle("calc-note", parent=calc_style, fontSize=7.5, textColor=GREY),
-    ))
-
-    # ------------------------------------------------------------------
-    # STAGE 4: Breadth (B)
-    # ------------------------------------------------------------------
-    flowables.append(Paragraph("Stage 4: Breadth (B)", stage_header_style))
+    flowables.append(Paragraph("Breadth (B)", stage_header_style))
 
     eff_ind = top.get("effective_indications")
     eff_ta = top.get("effective_therapy_areas")
@@ -764,9 +702,9 @@ def _build_methodology_flowables(payload: dict[str, Any], styles) -> list:
     ))
 
     # ------------------------------------------------------------------
-    # STAGE 5: Coherence (C)
+    # Coherence (C)
     # ------------------------------------------------------------------
-    flowables.append(Paragraph("Stage 5: Coherence (C)", stage_header_style))
+    flowables.append(Paragraph("Coherence (C)", stage_header_style))
 
     overall_coherence = top.get("overall_coherence")
     c = top.get("c")
@@ -790,7 +728,7 @@ def _build_methodology_flowables(payload: dict[str, Any], styles) -> list:
     ))
 
     # ------------------------------------------------------------------
-    # FINAL SCORE
+    # Final Score
     # ------------------------------------------------------------------
     flowables.append(Paragraph("Final Score", stage_header_style))
 
@@ -866,14 +804,25 @@ def _build_expansion_indications_table(opportunities: list[dict], styles) -> lis
 
     Layout: Therapy Area | Indications
     Each therapy area row lists all its indications (comma-separated),
-    so the reader sees the portfolio organised by therapeutic domain."""
+    so the reader sees the portfolio organised by therapeutic domain.
+    Both cells are wrapped in Paragraphs (not passed as raw strings) so
+    ReportLab actually wraps the text within the column width instead of
+    letting it overflow when a therapy area has many indications."""
     flowables = [Paragraph("EXPANSION INDICATIONS", styles["SectionHeader"]), Spacer(1, 8)]
 
     if not opportunities:
         flowables.append(Paragraph("No secondary indications identified.", styles["BodyProse"]))
         return flowables
 
-    # Group indications under each therapy area, preserving order
+    cell_style = ParagraphStyle(
+        "TableCellText", parent=styles["BodyProse"], fontSize=8.5, leading=11,
+        alignment=TA_LEFT, spaceAfter=0,
+    )
+
+    # Group indications under each therapy area, preserving order. Every
+    # therapy area present in `opportunities` gets its own row - this
+    # function is expected to be called with the FULL (uncapped) opportunity
+    # list, not a top-N slice, so no therapy area is silently dropped.
     ta_to_indications: OrderedDict[str, list[str]] = OrderedDict()
     for o in opportunities:
         ta = o.get("therapy_area") or "N/A"
@@ -886,8 +835,8 @@ def _build_expansion_indications_table(opportunities: list[dict], styles) -> lis
     table_data = [["Therapy Area", "Indications"]]
     for ta, indications in ta_to_indications.items():
         table_data.append([
-            ta,
-            ", ".join(indications),
+            Paragraph(escape_html(ta), cell_style),
+            Paragraph(escape_html(", ".join(indications)), cell_style),
         ])
 
     tbl = Table(table_data, colWidths=[2.2 * inch, 4.3 * inch])
@@ -929,7 +878,7 @@ def _build_narrative_flowables(report_data: dict[str, Any], payload: dict[str, A
         flowables.append(Paragraph(escape_html(item.get("explanation", "")), styles["InsightBody"]))
 
     # EXPANSION INDICATIONS - deterministic table, no LLM/rationale
-    flowables.extend(_build_expansion_indications_table(payload.get("opportunities") or [], styles))
+    flowables.extend(_build_expansion_indications_table(payload.get("all_opportunities") or [], styles))
     flowables.append(Spacer(1, 8))
 
     # EVIDENCE GAPS & RISKS
