@@ -323,7 +323,7 @@ def run_moa_mapping(drug_name: str = DRUG_NAME, drug_details_table: str = "drug_
         })
 
     # Step 4: Push new mappings to BQ
-    push_mappings(OT_MOA_TABLE, OT_MOA_SCHEMA, new_mappings)
+    push_mappings(OT_MOA_TABLE, OT_MOA_SCHEMA, new_mappings, key_column="moa")
 
     # Step 5: Return all mappings (existing + new)
     all_mappings: list[dict] = []
