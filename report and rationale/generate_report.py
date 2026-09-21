@@ -26,7 +26,7 @@ from datetime import date
 from io import BytesIO
 from typing import Any
 
-from google.cloud import bigquery, storage
+from google.cloud import bigquery
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import letter
@@ -42,14 +42,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from medical_potential.config import (
-    BQ_DATASET_ID,
-    GCS_BUCKET,
-    GCS_PIPELINE_CACHE_BASE_PATH,
-    GCS_REPORT_BASE_PATH,
-    LABEL_EXPANSION_OPPORTUNITY_TABLE,
-    PROJECT_ID,
-)
+from medical_potential.config import BQ_DATASET_ID, LABEL_EXPANSION_OPPORTUNITY_TABLE, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
 from ..indication_extractor.utils import gemini_generate
@@ -61,10 +54,6 @@ BLUE = colors.HexColor("#2E75B6")
 GREY = colors.HexColor("#666666")
 DARK_TEXT = colors.HexColor("#1A1A2E")
 LIGHT_BG = colors.HexColor("#F5F7FA")
-
-# This pillar's name, used as the last path segment under both GCS base
-# paths: {BASE_PATH}/{drug_name}/{PILLAR_NAME}/...
-PILLAR_NAME = "label_expansion_opportunity"
 
 # Columns pulled from LABEL_EXPANSION_OPPORTUNITY_TABLE (config.py) when a
 # report is generated standalone (no in-memory score_rows available).
@@ -89,61 +78,9 @@ _SECTION_HEADINGS = [
     "HEADLINE",
     "INDICATION LANDSCAPE",
     "KEY INSIGHTS",
-    "EXPANSION INDICATIONS",
     "EVIDENCE GAPS & RISKS",
     "BOTTOM LINE",
 ]
-
-
-# ==============================
-# GCS UPLOAD
-# ==============================
-_storage_client: storage.Client | None = None
-
-
-def _get_storage_client() -> storage.Client:
-    """Lazily creates a single shared ``storage.Client`` for this process."""
-    global _storage_client
-    if _storage_client is None:
-        _storage_client = storage.Client()
-    return _storage_client
-
-
-def _upload_bytes(blob_path: str, data: bytes, content_type: str) -> str:
-    """Uploads raw bytes to ``gs://{GCS_BUCKET}/{blob_path}``. Returns the
-    ``gs://`` URI of the uploaded object. Overwrites any existing object at
-    that path."""
-    client = _get_storage_client()
-    bucket = client.bucket(GCS_BUCKET)
-    blob = bucket.blob(blob_path)
-    blob.upload_from_string(data, content_type=content_type)
-    uri = f"gs://{GCS_BUCKET}/{blob_path}"
-    logger.info("[GCS_STORAGE] Uploaded %d byte(s) to %s", len(data), uri)
-    return uri
-
-
-def upload_report_pdf(drug_name: str, pdf_bytes: bytes, filename: str = "report.pdf") -> str:
-    """Uploads a PDF report to
-    ``{GCS_REPORT_BASE_PATH}/{drug_name}/{PILLAR_NAME}/{filename}``.
-
-    Returns the ``gs://`` URI of the uploaded file.
-    """
-    blob_path = f"{GCS_REPORT_BASE_PATH}/{drug_name}/{PILLAR_NAME}/{filename}"
-    return _upload_bytes(blob_path, pdf_bytes, content_type="application/pdf")
-
-
-def upload_json_payload(drug_name: str, payload: dict[str, Any], filename: str = "payload.json") -> str:
-    """Uploads a JSON payload to
-    ``{GCS_PIPELINE_CACHE_BASE_PATH}/{drug_name}/{PILLAR_NAME}/{filename}``.
-
-    Returns the ``gs://`` URI of the uploaded file. Shared by both
-    ``generate_report.py`` (its report payload/sections) and
-    ``generate_rationale.py`` (its rationale payload), so it lives here
-    rather than being duplicated in both files.
-    """
-    blob_path = f"{GCS_PIPELINE_CACHE_BASE_PATH}/{drug_name}/{PILLAR_NAME}/{filename}"
-    data = json.dumps(payload, indent=2, default=str).encode("utf-8")
-    return _upload_bytes(blob_path, data, content_type="application/json")
 
 
 # ==============================
@@ -205,7 +142,7 @@ def build_styles():
     ))
     styles.add(ParagraphStyle(
         name="SectionHeader", fontSize=11.5, leading=14, textColor=colors.white,
-        fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=0, backColor=NAVY,
+        fontName="Helvetica-Bold", spaceBefore=7, spaceAfter=0, backColor=NAVY,
         alignment=TA_LEFT, borderPadding=(6, 8, 6, 8),
     ))
     styles.add(ParagraphStyle(
@@ -388,21 +325,17 @@ def _build_narrative_prompt(payload: dict[str, Any]) -> str:
     ta_list = ", ".join(payload.get("therapy_areas") or []) or "None identified"
     sources_list = ", ".join(payload.get("data_sources") or []) or "Not specified"
 
-    secondary_rationale_lines = [
-        f"- {o.get('indication')} ({o.get('therapy_area')}): "
-        f"{payload.get('rationale_by_indication', {}).get(o.get('indication')) or 'No rationale captured in the available data.'}"
-        for o in payload.get("opportunities") or []
-    ]
-
     indication_lines = [
         f"- {o.get('indication')} | Therapy Area: {o.get('therapy_area')} | Phase: {o.get('phase') or 'N/A'} | "
         f"Region: {o.get('primary_region') or 'N/A'}"
-        for o in (payload.get("all_opportunities") or [])[:30]
+        for o in (payload.get("all_opportunities") or [])[:15]
     ]
 
-    return f"""You are a senior business analyst preparing a detailed analytical report
+    return f"""You are a senior business analyst preparing a concise analytical report
 on the label expansion dimension of the pharmaceutical molecule "{drug_name}"
-for senior business decision-makers.
+for senior business decision-makers. This report MUST fit within 2 pages of
+narrative content (a separate scoring-methodology page follows after yours,
+so keep this tight and avoid padding).
 
 This dimension evaluates the breadth and depth of the drug's indication landscape —
 how many distinct indications it is approved for or being studied in, whether it has
@@ -417,7 +350,7 @@ label expansion landscape for this molecule. This should be the single most impo
 takeaway a decision-maker needs.
 
 ## INDICATION LANDSCAPE
-Write 3-5 sentences providing the quantitative context a decision-maker needs.
+Write 3-4 sentences providing the quantitative context a decision-maker needs.
 Cover: how many distinct indications exist (primary vs. secondary/expansion),
 how many therapy areas the drug spans, what the primary indication(s) are and
 what expansion indications are being pursued, what data sources corroborate the
@@ -428,21 +361,22 @@ shape of the indication portfolio before diving into insights.
 
 ## KEY INSIGHTS
 
-Provide 4-6 key insights. For EACH insight, write EXACTLY two lines using this format:
+Provide 3-5 key insights. For EACH insight, write EXACTLY two lines using this format:
 Line 1: "Insight: " followed by a short, specific finding (ONE sentence, max 20 words).
          This is the bold headline of the insight.
-Line 2: "Why it matters: " followed by the business implication (2-3 sentences,
-         ~40-60 words). This is the explanatory body text.
+Line 2: The business implication, written directly as plain prose (1-2 sentences,
+         ~30-40 words) — do NOT prefix this line with any label at all, just
+         state the implication directly.
 
-IMPORTANT: You MUST use exactly the labels "Insight: " and "Why it matters: " —
-these labels are required for formatting.
+IMPORTANT: You MUST use exactly the label "Insight: " on line 1 of each insight —
+this label is required for formatting. Line 2 must NOT have any label or prefix.
 
 Example format:
 Insight: Drug spans 4 therapy areas beyond its original metabolic indication.
-Why it matters: Multi-therapy-area reach transforms the commercial model from a single-franchise asset to a platform molecule. Each new therapy area unlocks distinct prescriber networks, payer segments, and revenue pools — compounding lifecycle value.
+Multi-therapy-area reach transforms the commercial model into a platform play, unlocking distinct prescriber networks, payer segments, and revenue pools.
 
 Insight: 3 secondary indications are already in Phase 3, signaling near-term label expansion.
-Why it matters: Phase 3 secondary indications with active enrollment represent 12-24 month catalysts for label expansion. Successful readouts would broaden the addressable market and strengthen payer negotiation leverage with real-world evidence of multi-indication utility.
+Phase 3 secondary indications with active enrollment represent 12-24 month catalysts for label expansion and broader payer leverage.
 
 Be specific. Reference indication counts, therapy area breadth, primary vs. secondary
 classification, geographic reach, or data source corroboration. Do NOT write generic
@@ -456,20 +390,8 @@ Prioritize insights that address:
 5. Label expansion gaps that create risk or delay
 6. Pipeline maturity of secondary indications (how close to approval)
 
-## EXPANSION INDICATIONS
-For EACH secondary (expansion) indication listed in the data below, write EXACTLY
-two lines using this format:
-Line 1: "Indication: " followed by the indication name and its therapy area in parentheses.
-Line 2: "Rationale: " followed by 1-2 sentences explaining WHY this is classified as
-         a secondary/expansion indication — i.e., what makes it distinct from the primary
-         label, what evidence supports it, and its current development status. Use the
-         rationale data provided but rewrite it in clear business language.
-
-IMPORTANT: You MUST use exactly the labels "Indication: " and "Rationale: " —
-these labels are required for formatting. Cover ALL secondary indications listed.
-
 ## EVIDENCE GAPS & RISKS
-Write 3-5 bullet points (each starting with "- ") identifying the most material
+Write 3-4 bullet points (each starting with "- ") identifying the most material
 gaps in the label expansion profile and the business risk each creates. Focus ONLY
 on indication and expansion gaps — for example, missing indications in large
 addressable markets, limited expansion beyond primary therapy area, over-reliance
@@ -480,23 +402,26 @@ academic publishing, or the need for more published studies. These are NOT relev
 gaps for this report. Every gap must be about missing DATA or missing INDICATIONS.
 
 ## BOTTOM LINE
-Write 3-4 sentences stating what a decision-maker should infer from this dimension.
+Write 2-3 sentences stating what a decision-maker should infer from this dimension.
 Be direct and actionable — state whether the label expansion profile supports
 investment, partnership, or market entry decisions, and flag any conditions or
 watchpoints. Focus on the strategic value of the indication breadth.
 
 STRICT RULES:
-- Total length: 700-1000 words (the report should comfortably fill ~2 pages)
+- Total length: 400-550 words (this report must fit in 2 pages of narrative content)
 - NO technical jargon (no "Ep", "Et", "scoring", "model", "pipeline page API",
   "BigQuery", "ClinicalTrials.gov API", "Gemini", "LLM")
 - Do NOT mention scores of any kind — no Ep, Et, numerical scores, or scoring methodology
 - Do NOT mention peer-reviewed journals, publications, or academic publishing anywhere
-- You MUST use "Insight: " and "Why it matters: " labels exactly in KEY INSIGHTS
+- You MUST use the "Insight: " label exactly on line 1 of each KEY INSIGHTS item;
+  line 2 must be plain prose with no label
 - Every statement must add insight or implication — no restating obvious facts
 - Use clear, natural business language that a non-scientific executive can follow
 - Do not use markdown bold (**text**) — use plain text only
 - Reference specific numbers, indication counts, and therapy areas wherever possible
-- Keep paragraphs short (2-4 sentences max)
+- Keep paragraphs short (2-3 sentences max)
+- Do NOT include a section on individual expansion indications — that is handled
+  separately as a table; do not restate the full indication list in prose
 
 DATA FOR YOUR ANALYSIS:
 ======================
@@ -515,16 +440,13 @@ Has Regulatory Label Data: {'Yes' if payload.get('has_regulatory_label') else 'N
 
 Phase Distribution: {json.dumps(payload.get('phase_distribution', {}))}
 
-Secondary Indication Details (with rationale for each):
-{chr(10).join(secondary_rationale_lines) if secondary_rationale_lines else 'No secondary indications identified'}
-
-Indication Details (first 30):
+Indication Details (first 15):
 {chr(10).join(indication_lines) if indication_lines else 'No indication details available'}
 
 Now write the report. Remember: business language, specific numbers, no jargon,
-no scores, 700-1000 words.
-CRITICAL: In KEY INSIGHTS, every insight headline MUST start with "Insight: "
-and every body line MUST start with "Why it matters: "."""
+no scores, 400-550 words.
+CRITICAL: In KEY INSIGHTS, every insight headline MUST start with "Insight: " and
+the following line must be plain prose with no "Why it matters" or any other label."""
 
 
 # ==============================
@@ -559,35 +481,25 @@ def _split_into_sections(text: str) -> dict[str, str]:
 
 
 def _parse_insights(text: str) -> list[dict[str, str]]:
+    """Parses ``Insight: <headline>`` lines, where everything following an
+    "Insight:" line (up to the next "Insight:" line or end of block) is
+    that insight's plain-prose explanation - no "Why it matters:" or any
+    other label required on the explanation line(s)."""
     insights: list[dict[str, str]] = []
     current: dict[str, str] | None = None
     for line in (text or "").splitlines():
         stripped = line.strip()
         if stripped.lower().startswith("insight:"):
             if current:
+                current["explanation"] = current["explanation"].strip()
                 insights.append(current)
-            current = {"insight": stripped.split(":", 1)[1].strip(), "why_it_matters": ""}
-        elif stripped.lower().startswith("why it matters:") and current is not None:
-            current["why_it_matters"] = stripped.split(":", 1)[1].strip()
+            current = {"insight": stripped.split(":", 1)[1].strip(), "explanation": ""}
+        elif current is not None and stripped:
+            current["explanation"] = f"{current['explanation']} {stripped}".strip()
     if current:
+        current["explanation"] = current["explanation"].strip()
         insights.append(current)
     return insights
-
-
-def _parse_expansion_indications(text: str) -> list[dict[str, str]]:
-    items: list[dict[str, str]] = []
-    current: dict[str, str] | None = None
-    for line in (text or "").splitlines():
-        stripped = line.strip()
-        if stripped.lower().startswith("indication:"):
-            if current:
-                items.append(current)
-            current = {"indication": stripped.split(":", 1)[1].strip(), "rationale": ""}
-        elif stripped.lower().startswith("rationale:") and current is not None:
-            current["rationale"] = stripped.split(":", 1)[1].strip()
-    if current:
-        items.append(current)
-    return items
 
 
 def _parse_bullets(text: str) -> list[str]:
@@ -605,7 +517,6 @@ def _fallback_report_data(payload: dict[str, Any]) -> dict[str, Any]:
     drug_name = payload.get("drug_name", "Unknown")
     num_ind = payload.get("num_secondary_indications", 0)
     num_ta = payload.get("num_therapy_areas", 0)
-    opportunities = payload.get("opportunities") or []
     ta_text = ", ".join(payload.get("therapy_areas") or []) or "none identified"
 
     return {
@@ -622,22 +533,12 @@ def _fallback_report_data(payload: dict[str, Any]) -> dict[str, Any]:
         "KEY INSIGHTS": (
             [{
                 "insight": f"{num_ta} therapy area(s) represented among expansion indications.",
-                "why_it_matters": (
+                "explanation": (
                     "Broader therapy area reach can diversify commercial exposure across "
                     "prescriber networks and payer segments."
                 ),
             }] if num_ta else []
         ),
-        "EXPANSION INDICATIONS": [
-            {
-                "indication": f"{o.get('indication')} ({o.get('therapy_area')})",
-                "rationale": (
-                    payload.get("rationale_by_indication", {}).get(o.get("indication"))
-                    or "No rationale captured in the available data."
-                ),
-            }
-            for o in opportunities
-        ],
         "EVIDENCE GAPS & RISKS": [
             "Limited data corroboration is available for some indications; confidence should be weighed accordingly.",
         ],
@@ -671,7 +572,6 @@ def _extract_report_data(payload: dict[str, Any]) -> dict[str, Any]:
             "HEADLINE": sections.get("HEADLINE", "").strip(),
             "INDICATION LANDSCAPE": sections.get("INDICATION LANDSCAPE", "").strip(),
             "KEY INSIGHTS": insights,
-            "EXPANSION INDICATIONS": _parse_expansion_indications(sections.get("EXPANSION INDICATIONS", "")),
             "EVIDENCE GAPS & RISKS": _parse_bullets(sections.get("EVIDENCE GAPS & RISKS", "")),
             "BOTTOM LINE": sections.get("BOTTOM LINE", "").strip(),
         }
@@ -794,7 +694,44 @@ def _build_methodology_flowables(payload: dict[str, Any], styles) -> list:
 # ==============================
 # PDF ASSEMBLY
 # ==============================
-def _build_narrative_flowables(report_data: dict[str, Any], styles) -> list:
+def _build_expansion_indications_table(opportunities: list[dict], styles) -> list:
+    """Deterministic table of expansion indications - Indication, Therapy
+    Area, Phase, Final Score. No rationale column (not required)."""
+    flowables = [Paragraph("EXPANSION INDICATIONS", styles["SectionHeader"]), Spacer(1, 8)]
+
+    if not opportunities:
+        flowables.append(Paragraph("No secondary indications identified.", styles["BodyProse"]))
+        return flowables
+
+    table_data = [["Indication", "Therapy Area", "Phase", "Final Score"]]
+    for o in opportunities:
+        fs = o.get("final_score")
+        table_data.append([
+            o.get("indication") or "N/A",
+            o.get("therapy_area") or "N/A",
+            o.get("phase") or "N/A",
+            f"{fs:.2f}" if isinstance(fs, (int, float)) else "N/A",
+        ])
+
+    tbl = Table(table_data, colWidths=[2.3 * inch, 1.6 * inch, 1.2 * inch, 1.4 * inch])
+    tbl.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), NAVY),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CCCCCC")),
+        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHT_BG]),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+    ]))
+    flowables.append(tbl)
+    return flowables
+
+
+def _build_narrative_flowables(report_data: dict[str, Any], payload: dict[str, Any], styles) -> list:
     flowables = []
 
     # HEADLINE
@@ -812,18 +749,11 @@ def _build_narrative_flowables(report_data: dict[str, Any], styles) -> list:
     flowables.append(Spacer(1, 8))
     for item in report_data.get("KEY INSIGHTS", []):
         flowables.append(Paragraph(escape_html(item.get("insight", "")), styles["InsightHeadline"]))
-        flowables.append(Paragraph(
-            f"<b>Why it matters:</b> {escape_html(item.get('why_it_matters', ''))}", styles["InsightBody"],
-        ))
+        flowables.append(Paragraph(escape_html(item.get("explanation", "")), styles["InsightBody"]))
 
-    # EXPANSION INDICATIONS
-    flowables.append(Paragraph("EXPANSION INDICATIONS", styles["SectionHeader"]))
+    # EXPANSION INDICATIONS - deterministic table, no LLM/rationale
+    flowables.extend(_build_expansion_indications_table(payload.get("opportunities") or [], styles))
     flowables.append(Spacer(1, 8))
-    for item in report_data.get("EXPANSION INDICATIONS", []):
-        flowables.append(Paragraph(escape_html(item.get("indication", "")), styles["InsightHeadline"]))
-        flowables.append(Paragraph(
-            f"<b>Rationale:</b> {escape_html(item.get('rationale', ''))}", styles["InsightBody"],
-        ))
 
     # EVIDENCE GAPS & RISKS
     flowables.append(Paragraph("EVIDENCE GAPS &amp; RISKS", styles["SectionHeader"]))
@@ -847,7 +777,8 @@ def generate_label_expansion_report_bytes(
 
     Returns ``(pdf_bytes, report_content, payload)`` - same shape as
     ``ssp_report.generate_prompt_safety_report_bytes``. This function does
-    NOT upload the PDF itself; the caller uploads it via ``upload_report_pdf``.
+    NOT upload the PDF itself; the caller uploads it via
+    ``medical_potential.gcp_utils.upload_dimension_report_pdf_to_gcs``.
     """
     payload = _prepare_prompt_payload(data)
     report_data = _extract_report_data(payload)
@@ -885,7 +816,7 @@ def generate_label_expansion_report_bytes(
         Spacer(1, 8),
     ]
 
-    story.extend(_build_narrative_flowables(report_data, styles))
+    story.extend(_build_narrative_flowables(report_data, payload, styles))
     story.extend(_build_methodology_flowables(payload, styles))
 
     story.extend([
