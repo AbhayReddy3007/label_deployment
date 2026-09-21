@@ -93,10 +93,14 @@ def label_expansion(
     **Report Generation (Step 7):**
         7.  Generates a short plain-text rationale and a 2-page PDF report
             summarizing the drug's label-expansion opportunities. Uploads
-            the PDF to GCS_REPORT_BASE_PATH/{drug_name}/{PILLAR_NAME}/report.pdf
-            and a combined JSON cache (rationale + report payloads/sections)
-            to GCS_PIPELINE_CACHE_BASE_PATH/{drug_name}/{PILLAR_NAME}/payload.json.
-            Runs only if score rows exist.
+            the PDF and a combined JSON cache (rationale + report
+            payloads/sections) via the shared ``medical_potential.gcp_utils``
+            helpers (``upload_dimension_report_pdf_to_gcs`` /
+            ``upload_dimension_payload_cache_to_gcs`` - each also writes a
+            timestamped archived copy), and appends the top score + rationale
+            to ``DIM_SCORES_TABLE`` via ``append_dimension_score_to_bigquery``.
+            Dimension name: "Label Expansion Opportunity". Runs only if
+            score rows exist.
 
     Args:
         drug_name: The drug / molecule name (e.g. "semaglutide").
@@ -111,8 +115,9 @@ def label_expansion(
         run_ot_mapping: Whether to run Steps 4-6. Set ``False`` to only
             discover indications without OT resolution or scoring.
         generate_report: Whether to run Step 7 (rationale + PDF report
-            generation, then upload to GCS). Adds two Gemini calls and two
-            GCS uploads per drug on top of Steps 1-6; set ``False`` to skip.
+            generation, then upload to GCS/BigQuery). Adds two Gemini calls,
+            two GCS uploads (each with an archived copy), and one BigQuery
+            append per drug on top of Steps 1-6; set ``False`` to skip.
         start_from: Which stage to start at - skips every stage before it,
             reusing whatever is already in BigQuery from a prior run
             instead of re-discovering/re-resolving it. One of:
@@ -134,8 +139,10 @@ def label_expansion(
         dict with keys: ``drug_name``, ``merged_rows``, ``moa_mappings``,
         ``indication_mappings``, ``score_rows``, ``rationale``,
         ``pdf_bytes``, ``report_content``, ``report_gcs_uri`` (the
-        ``gs://`` URI of the uploaded PDF, or ``None``), ``cache_gcs_uri``
-        (the ``gs://`` URI of the uploaded JSON cache, or ``None``).
+        ``gs://`` URI of the uploaded PDF, or ``None``),
+        ``report_archive_gcs_uri`` (the ``gs://`` URI of the timestamped
+        archived PDF copy, or ``None``), ``cache_gcs_uri`` (the ``gs://``
+        URI of the uploaded JSON cache, or ``None``).
     """
     if not isinstance(drug_name, str) or not drug_name.strip():
         raise TypeError(
@@ -306,10 +313,13 @@ def label_expansion(
         logger.info("[LABEL_EXPANSION] Step 6: Skipped (run_ot_mapping=False)")
 
     # ── Step 7: Generate rationale and PDF report, upload to GCS ────────────
+    DIMENSION_NAME = "Label Expansion Opportunity"
+
     rationale = None
     pdf_bytes = None
     report_content = None
     report_gcs_uri = None
+    report_archive_gcs_uri = None
     cache_gcs_uri = None
     if generate_report and run_ot_mapping and score_rows:
         logger.info("[LABEL_EXPANSION] Step 7: Generate rationale and PDF report")
@@ -319,8 +329,11 @@ def label_expansion(
             from .generate_report_and_rationale import (
                 generate_label_expansion_rationale,
                 generate_label_expansion_report_bytes,
-                upload_json_payload,
-                upload_report_pdf,
+            )
+            from medical_potential.gcp_utils import (
+                append_dimension_score_to_bigquery,
+                upload_dimension_payload_cache_to_gcs,
+                upload_dimension_report_pdf_to_gcs,
             )
 
             report_data = {"drug_name": drug_name, "score_rows": score_rows, "merged_rows": merged_rows}
@@ -332,24 +345,43 @@ def label_expansion(
             )
 
             try:
-                report_gcs_uri = upload_report_pdf(drug_name, pdf_bytes)
-                cache_gcs_uri = upload_json_payload(
-                    drug_name,
+                report_gcs_uri, report_archive_gcs_uri = upload_dimension_report_pdf_to_gcs(
+                    pdf_bytes, drug_name, DIMENSION_NAME,
+                )
+                cache_gcs_uri = upload_dimension_payload_cache_to_gcs(
                     {
                         "rationale": rationale,
                         "rationale_payload": rationale_payload,
                         "report_content": report_content,
                         "report_payload": report_payload,
                     },
+                    drug_name, DIMENSION_NAME,
                 )
                 logger.info(
-                    "[LABEL_EXPANSION] Step 7 complete: report -> %s, cache -> %s",
-                    report_gcs_uri, cache_gcs_uri,
+                    "[LABEL_EXPANSION] Step 7: report -> %s (archived: %s), cache -> %s",
+                    report_gcs_uri, report_archive_gcs_uri, cache_gcs_uri,
                 )
             except Exception:
                 logger.exception(
                     "[LABEL_EXPANSION] Step 7: GCS upload failed for '%s' (report/rationale were still generated)",
                     drug_name,
+                )
+
+            try:
+                top_final_score = (report_content or {}).get("summary_box", {}).get("final_score")
+                append_dimension_score_to_bigquery(
+                    molecule_name=drug_name,
+                    dimension_name=DIMENSION_NAME,
+                    score=top_final_score,
+                    rationale=rationale,
+                )
+                logger.info(
+                    "[LABEL_EXPANSION] Step 7 complete: appended score %s + rationale to DIM_SCORES_TABLE",
+                    top_final_score,
+                )
+            except Exception:
+                logger.exception(
+                    "[LABEL_EXPANSION] Step 7: failed to append dimension score for '%s'", drug_name,
                 )
         except Exception:
             logger.exception("[LABEL_EXPANSION] Step 7 failed for '%s'", drug_name)
@@ -369,6 +401,7 @@ def label_expansion(
         "pdf_bytes": pdf_bytes,
         "report_content": report_content,
         "report_gcs_uri": report_gcs_uri,
+        "report_archive_gcs_uri": report_archive_gcs_uri,
         "cache_gcs_uri": cache_gcs_uri,
     }
 
