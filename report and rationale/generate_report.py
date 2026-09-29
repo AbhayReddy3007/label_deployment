@@ -31,7 +31,7 @@ from typing import Any
 
 from google.cloud import bigquery
 from reportlab.lib import colors
-from reportlab.lib.enums import TA_JUSTIFY, TA_LEFT
+from reportlab.lib.enums import TA_CENTER, TA_JUSTIFY, TA_LEFT
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import inch
@@ -49,7 +49,7 @@ from medical_potential.config import BQ_DATASET_ID, LABEL_EXPANSION_OPPORTUNITY_
 from medical_potential.gcp_utils import get_bq_client
 
 from ..indication_extractor.utils import gemini_generate
-from ..scoring.score_calculator import SCORING_FORMULAS, get_methodology_text
+from ..scoring.trial_selector import phase_rank
 
 logger = logging.getLogger(__name__)
 
@@ -595,19 +595,20 @@ def _fmt(value) -> str:
 
 
 def _build_methodology_flowables(payload: dict[str, Any], styles) -> list:
-    """A dedicated set of pages explaining how Final Score is calculated,
-    showing every intermediate calculation stage with the drug's actual
-    numbers worked out step-by-step. Unlike the rest of the report, these
-    pages ARE meant to reference the scoring components by name - explaining
-    them is their entire purpose."""
+    """A dedicated final page explaining what drove the Final Score, in
+    plain business language with no formulas or step-by-step math.
+    Identifies which therapy area is pulling the score up and which is
+    pulling it down, using each therapy area's Link value (the only
+    quantity in the model that actually varies by therapy area - Breadth,
+    Coherence, and the Final Score itself are single drug-level numbers)."""
     flowables = [
         PageBreak(),
         Paragraph("HOW THIS SCORE WAS CALCULATED", styles["SectionHeader"]),
         Spacer(1, 8),
     ]
 
-    opportunities = payload.get("opportunities") or []
-    if not opportunities:
+    all_opportunities = payload.get("all_opportunities") or []
+    if not all_opportunities:
         flowables.append(Paragraph(
             "No scored opportunities were available to illustrate the calculation.",
             styles["BodyProse"],
@@ -616,180 +617,124 @@ def _build_methodology_flowables(payload: dict[str, Any], styles) -> list:
 
     drug_name = payload.get("drug_name", "the drug")
 
-    methodology = get_methodology_text(drug_name)
-    flowables.append(Paragraph(escape_html(methodology["intro"]), styles["BodyProse"]))
-    flowables.append(Spacer(1, 6))
+    # Link value per therapy area (uniform within each therapy area already).
+    ta_link: dict[str, float] = {}
+    for o in all_opportunities:
+        ta = o.get("therapy_area")
+        lt = o.get("link_ta")
+        if ta and isinstance(lt, (int, float)) and ta not in ta_link:
+            ta_link[ta] = lt
 
-    # Use the top-scoring opportunity as the worked example
-    top = opportunities[0]
-    top_ind = top.get("indication") or "N/A"
+    # Breadth, Coherence, and Final Score are single drug-level numbers -
+    # identical on every row - so any row carries the values for the whole drug.
+    reference_row = all_opportunities[0]
+    breadth = reference_row.get("b")
+    coherence = reference_row.get("overall_coherence")
+    final_score = reference_row.get("final_score")
+    final_score_text = f"{final_score:.2f} out of 5" if isinstance(final_score, (int, float)) else "N/A"
 
-    # Helper styles for formula display
-    formula_style = ParagraphStyle(
-        "FormulaText", parent=styles["BodyProse"], fontSize=9, leading=12,
-        textColor=NAVY, fontName="Helvetica-Bold", leftIndent=10, spaceAfter=2,
-    )
-    calc_style = ParagraphStyle(
-        "CalcText", parent=styles["BodyProse"], fontSize=8.5, leading=11,
-        textColor=DARK_TEXT, fontName="Helvetica", leftIndent=15, spaceAfter=4,
-    )
-    stage_header_style = ParagraphStyle(
-        "StageHeader", parent=styles["InsightHeadline"], fontSize=10, leading=13,
+    sub_header_style = ParagraphStyle(
+        "MethodologySubHeader", parent=styles["InsightHeadline"], fontSize=10, leading=13,
         textColor=BLUE, fontName="Helvetica-Bold", spaceBefore=10, spaceAfter=4,
     )
+    cell_style = ParagraphStyle(
+        "MethodologyCellText", parent=styles["BodyProse"], fontSize=8.5, leading=11,
+        alignment=TA_LEFT, spaceAfter=0,
+    )
 
-    flowables.append(Paragraph(
-        f"Worked example using the top-scoring indication: <b>{escape_html(top_ind)}</b>",
-        styles["InsightHeadline"],
-    ))
-    flowables.append(Spacer(1, 4))
+    intro = (
+        f"{drug_name}'s Final Score comes down to two things: how strong and consistent "
+        f"the clinical evidence is across its candidate indications, and how broad the "
+        f"opportunity is across different therapy areas. The two combine into a single "
+        f"score from 1 to 5 - the stronger and broader the evidence, the higher the score."
+    )
+    flowables.append(Paragraph(escape_html(intro), styles["BodyProse"]))
+    flowables.append(Spacer(1, 6))
 
-    # ------------------------------------------------------------------
-    # Breadth (B)
-    # ------------------------------------------------------------------
-    flowables.append(Paragraph("Breadth (B)", stage_header_style))
+    if len(ta_link) >= 2:
+        best_ta = max(ta_link, key=ta_link.get)
+        worst_ta = min(ta_link, key=ta_link.get)
+        if best_ta != worst_ta:
+            driver_text = (
+                f"The score is being pulled up mainly by <b>{escape_html(best_ta)}</b>, "
+                f"where the clinical evidence is strongest and most consistent. It is being "
+                f"held back by <b>{escape_html(worst_ta)}</b>, where the evidence is comparatively "
+                f"weaker or less mature. Strengthening the evidence in {escape_html(worst_ta)} - "
+                f"through further trials or regulatory progress - would have the biggest impact "
+                f"on raising the overall score."
+            )
+        else:
+            driver_text = f"Evidence strength is broadly consistent across all of {escape_html(drug_name)}'s therapy areas."
+        flowables.append(Paragraph(driver_text, styles["BodyProse"]))
+        flowables.append(Spacer(1, 6))
+    elif len(ta_link) == 1:
+        only_ta = next(iter(ta_link))
+        flowables.append(Paragraph(
+            escape_html(
+                f"All of {drug_name}'s scored evidence currently sits within a single "
+                f"therapy area, {only_ta}."
+            ),
+            styles["BodyProse"],
+        ))
+        flowables.append(Spacer(1, 6))
 
-    eff_ind = top.get("effective_indications")
-    eff_ta = top.get("effective_therapy_areas")
-    b_ind = top.get("b_ind")
-    b_ta = top.get("b_ta")
-    l_ind = top.get("l_ind")
-    b_raw_ind = top.get("b_raw_ind")
-    l_ta = top.get("l_ta")
-    b_raw_ta = top.get("b_raw_ta")
-    b = top.get("b")
-
-    # Indication Breadth
-    flowables.append(Paragraph(
-        escape_html(SCORING_FORMULAS["b_ind"]["formula"]),
-        formula_style,
-    ))
-    flowables.append(Paragraph(
-        f"Effective Indications = {_fmt(eff_ind)}",
-        calc_style,
-    ))
-    flowables.append(Paragraph(
-        f"L_ind({_fmt(eff_ind)}) = {_fmt(l_ind)}, "
-        f"B_raw_ind = {_fmt(b_raw_ind)}, "
-        f"B_ind = <b>{_fmt(b_ind)}</b>",
-        calc_style,
-    ))
-
-    # Therapy Area Breadth
-    flowables.append(Paragraph(
-        escape_html(SCORING_FORMULAS["b_ta"]["formula"]),
-        formula_style,
-    ))
-    flowables.append(Paragraph(
-        f"Effective Therapy Areas = {_fmt(eff_ta)}",
-        calc_style,
-    ))
-    flowables.append(Paragraph(
-        f"L_TA({_fmt(eff_ta)}) = {_fmt(l_ta)}, "
-        f"B_raw_TA = {_fmt(b_raw_ta)}, "
-        f"B_TA = <b>{_fmt(b_ta)}</b>",
-        calc_style,
-    ))
-
-    # Combined Breadth
-    flowables.append(Paragraph(
-        escape_html(SCORING_FORMULAS["b"]["formula"]),
-        formula_style,
-    ))
-    flowables.append(Paragraph(
-        f"= {_fmt(b_ind)} x {_fmt(b_ta)} = <b>{_fmt(b)}</b>",
-        calc_style,
-    ))
-
-    # ------------------------------------------------------------------
-    # Coherence (C)
-    # ------------------------------------------------------------------
-    flowables.append(Paragraph("Coherence (C)", stage_header_style))
-
-    overall_coherence = top.get("overall_coherence")
-    c = top.get("c")
-
-    flowables.append(Paragraph(
-        escape_html(SCORING_FORMULAS["overall_coherence"]["formula"]),
-        formula_style,
-    ))
-    flowables.append(Paragraph(
-        f"Overall Coherence = <b>{_fmt(overall_coherence)}</b>",
-        calc_style,
-    ))
-
-    flowables.append(Paragraph(
-        escape_html(SCORING_FORMULAS["c"]["formula"]),
-        formula_style,
-    ))
-    flowables.append(Paragraph(
-        f"= 0.1 + 0.9 x ({_fmt(overall_coherence)})^1.75 = <b>{_fmt(c)}</b>",
-        calc_style,
-    ))
-
-    # ------------------------------------------------------------------
-    # Final Score
-    # ------------------------------------------------------------------
-    flowables.append(Paragraph("Final Score", stage_header_style))
-
-    final_score = top.get("final_score")
-
-    flowables.append(Paragraph(
-        escape_html(SCORING_FORMULAS["final_score"]["formula"]),
-        formula_style,
-    ))
-    flowables.append(Paragraph(
-        f"= 1 + 4 x {_fmt(b)} x {_fmt(c)} = <b>{f'{final_score:.2f}' if isinstance(final_score, (int, float)) else 'N/A'}</b>",
-        calc_style,
-    ))
+    breadth_text = (
+        f"Two other factors set the ceiling on the score. Breadth reflects how many "
+        f"indications and therapy areas {escape_html(drug_name)} has credible evidence for - "
+        f"the wider the reach, the more this contributes. Coherence reflects how "
+        f"consistently strong that evidence is across the board - a few very strong "
+        f"therapy areas can lift coherence even if others are weaker, but scattered, "
+        f"low-confidence evidence pulls it down. Combined, these put {escape_html(drug_name)}'s "
+        f"Final Score at <b>{final_score_text}</b>."
+    )
+    flowables.append(Paragraph(breadth_text, styles["BodyProse"]))
     flowables.append(Spacer(1, 10))
 
     # ------------------------------------------------------------------
-    # FULL TABLE: all indications with every intermediate value
+    # Therapy-area-level summary table
     # ------------------------------------------------------------------
-    flowables.append(Paragraph("All Scored Indications", stage_header_style))
+    flowables.append(Paragraph("Score By Therapy Area", sub_header_style))
     flowables.append(Spacer(1, 4))
 
-    table_data = [["Indication", "Prior", "Maturity", "Q_i", "e_phase_i", "e_i", "Link", "Breadth", "Coherence", "Final"]]
-    for o in opportunities:
-        fs = o.get("final_score")
+    table_data = [["Therapy Area", "Link (TA)", "Breadth", "Coherence", "Final Score"]]
+    for ta in sorted(ta_link.keys()):
         table_data.append([
-            o.get("indication") or "N/A",
-            _fmt(o.get("prior")),
-            _fmt(o.get("maturity_weight")),
-            _fmt(o.get("q_i")),
-            _fmt(o.get("e_phase_i")),
-            _fmt(o.get("e_i")),
-            _fmt(o.get("link")),
-            _fmt(o.get("b")),
-            _fmt(o.get("c")),
-            f"{fs:.2f}" if isinstance(fs, (int, float)) else "N/A",
+            Paragraph(escape_html(ta), cell_style),
+            _fmt(ta_link[ta]),
+            _fmt(breadth),
+            _fmt(coherence),
+            f"{final_score:.2f}" if isinstance(final_score, (int, float)) else "N/A",
         ])
 
     tbl = Table(
         table_data,
-        colWidths=[1.35 * inch, 0.5 * inch, 0.55 * inch, 0.5 * inch, 0.55 * inch, 0.5 * inch, 0.5 * inch, 0.55 * inch, 0.6 * inch, 0.5 * inch],
+        colWidths=[2.4 * inch, 1.1 * inch, 1.1 * inch, 1.1 * inch, 1.1 * inch],
     )
     tbl.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("FONTSIZE", (0, 0), (-1, -1), 8.5),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("ALIGN", (1, 1), (-1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CCCCCC")),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHT_BG]),
-        ("TOPPADDING", (0, 0), (-1, -1), 3),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-        ("LEFTPADDING", (0, 0), (-1, -1), 3),
-        ("RIGHTPADDING", (0, 0), (-1, -1), 3),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
     ]))
     flowables.append(tbl)
     flowables.append(Spacer(1, 6))
 
-    legend = methodology["legend"]
     flowables.append(Paragraph(
-        escape_html(legend),
+        escape_html(
+            "Link (TA) is the strength of the clinical evidence within that therapy area. "
+            "Breadth and Coherence are calculated once for the drug as a whole (not per "
+            "therapy area), which is why they repeat across every row - they're included "
+            "here so each therapy area's evidence strength can be read alongside the "
+            "factors that turn it into the overall Final Score."
+        ),
         ParagraphStyle("methodology-legend", parent=styles["BodyProse"], fontSize=7.5, leading=10, textColor=GREY),
     ))
 
@@ -799,15 +744,21 @@ def _build_methodology_flowables(payload: dict[str, Any], styles) -> list:
 # ==============================
 # PDF ASSEMBLY
 # ==============================
-def _build_expansion_indications_table(opportunities: list[dict], styles) -> list:
-    """Expansion indications grouped by Therapy Area.
+# Fixed phase buckets every therapy area is broken into - one row each,
+# always in this order, using the same phase_rank(...) bucketing the
+# scoring model itself uses (1=Phase 1 ... 4=Approved/Phase 4).
+_PHASE_BUCKETS = [(1, "Phase 1"), (2, "Phase 2"), (3, "Phase 3"), (4, "Approved")]
 
-    Layout: Therapy Area | Indications
-    Each therapy area row lists all its indications (comma-separated),
-    so the reader sees the portfolio organised by therapeutic domain.
-    Both cells are wrapped in Paragraphs (not passed as raw strings) so
-    ReportLab actually wraps the text within the column width instead of
-    letting it overflow when a therapy area has many indications."""
+
+def _build_expansion_indications_table(opportunities: list[dict], styles) -> list:
+    """Expansion indications grouped by Therapy Area, then by phase.
+
+    Layout: Therapy Area | Phase | Indications
+    Each therapy area gets exactly 4 rows - one per phase bucket - with
+    the Therapy Area cell merged (SPAN) and vertically + horizontally
+    centered across its 4 rows, so it's shown once rather than repeated.
+    Indication cells are wrapped in Paragraphs so long lists wrap within
+    the column instead of overflowing it."""
     flowables = [Paragraph("EXPANSION INDICATIONS", styles["SectionHeader"]), Spacer(1, 8)]
 
     if not opportunities:
@@ -818,40 +769,70 @@ def _build_expansion_indications_table(opportunities: list[dict], styles) -> lis
         "TableCellText", parent=styles["BodyProse"], fontSize=8.5, leading=11,
         alignment=TA_LEFT, spaceAfter=0,
     )
+    ta_cell_style = ParagraphStyle(
+        "TATableCellText", parent=cell_style, alignment=TA_CENTER,
+        fontName="Helvetica-Bold",
+    )
 
-    # Group indications under each therapy area, preserving order. Every
-    # therapy area present in `opportunities` gets its own row - this
-    # function is expected to be called with the FULL (uncapped) opportunity
-    # list, not a top-N slice, so no therapy area is silently dropped.
-    ta_to_indications: OrderedDict[str, list[str]] = OrderedDict()
+    # Group indications under each (therapy area, phase bucket), preserving
+    # therapy-area order of first appearance. Every therapy area present in
+    # `opportunities` gets its own block - this function is expected to be
+    # called with the FULL (uncapped) opportunity list, not a top-N slice,
+    # so no therapy area is silently dropped.
+    ta_phase_to_indications: OrderedDict[str, dict[int, list[str]]] = OrderedDict()
     for o in opportunities:
         ta = o.get("therapy_area") or "N/A"
         ind = o.get("indication") or "N/A"
-        if ta not in ta_to_indications:
-            ta_to_indications[ta] = []
-        if ind not in ta_to_indications[ta]:
-            ta_to_indications[ta].append(ind)
+        rank = phase_rank(o.get("phase"))
+        if rank not in (1, 2, 3, 4):
+            continue  # phase not recognized - doesn't fit the fixed 4-row structure
+        if ta not in ta_phase_to_indications:
+            ta_phase_to_indications[ta] = {1: [], 2: [], 3: [], 4: []}
+        if ind not in ta_phase_to_indications[ta][rank]:
+            ta_phase_to_indications[ta][rank].append(ind)
 
-    table_data = [["Therapy Area", "Indications"]]
-    for ta, indications in ta_to_indications.items():
-        table_data.append([
-            Paragraph(escape_html(ta), cell_style),
-            Paragraph(escape_html(", ".join(indications)), cell_style),
-        ])
+    table_data = [["Therapy Area", "Phase", "Indications"]]
+    span_commands: list[tuple] = []
+    background_commands: list[tuple] = []
+    row_idx = 1  # row 0 is the header
+    striped = False
 
-    tbl = Table(table_data, colWidths=[2.2 * inch, 4.3 * inch])
+    for ta, phase_map in ta_phase_to_indications.items():
+        start_row = row_idx
+        for rank, label in _PHASE_BUCKETS:
+            indications = phase_map.get(rank) or []
+            indications_text = ", ".join(indications) if indications else "\u2014"
+            table_data.append([
+                Paragraph(escape_html(ta), ta_cell_style) if rank == 1 else "",
+                label,
+                Paragraph(escape_html(indications_text), cell_style),
+            ])
+            row_idx += 1
+        end_row = row_idx - 1
+        # Merge the Therapy Area cell across this TA's 4 rows.
+        span_commands.append(("SPAN", (0, start_row), (0, end_row)))
+        # Stripe by TA block (not by individual row) so the alternating
+        # background reads cleanly across the merged cell.
+        background_commands.append(
+            ("BACKGROUND", (0, start_row), (-1, end_row), LIGHT_BG if striped else colors.white)
+        )
+        striped = not striped
+
+    tbl = Table(table_data, colWidths=[1.6 * inch, 0.9 * inch, 4.0 * inch])
     tbl.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), NAVY),
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 8.5),
-        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (1, 1), (1, -1), "CENTER"),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#CCCCCC")),
-        ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, LIGHT_BG]),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ("LEFTPADDING", (0, 0), (-1, -1), 6),
         ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+        *span_commands,
+        *background_commands,
     ]))
     flowables.append(tbl)
     return flowables
