@@ -754,11 +754,15 @@ def _build_expansion_indications_table(opportunities: list[dict], styles) -> lis
     """Expansion indications grouped by Therapy Area, then by phase.
 
     Layout: Therapy Area | Phase | Indications
-    Each therapy area gets exactly 4 rows - one per phase bucket - with
-    the Therapy Area cell merged (SPAN) and vertically + horizontally
-    centered across its 4 rows, so it's shown once rather than repeated.
-    Indication cells are wrapped in Paragraphs so long lists wrap within
-    the column instead of overflowing it."""
+    Each therapy area gets one row per phase bucket that actually HAS at
+    least one indication - a phase with no indications for that therapy
+    area is skipped entirely rather than shown as a blank/dashed row, so
+    a therapy area may end up with anywhere from 1 to 4 rows. The Therapy
+    Area cell is merged (SPAN) and vertically + horizontally centered
+    across however many rows that therapy area ends up with, so it's
+    shown once rather than repeated. Indication cells are wrapped in
+    Paragraphs so long lists wrap within the column instead of
+    overflowing it."""
     flowables = [Paragraph("EXPANSION INDICATIONS", styles["SectionHeader"]), Spacer(1, 8)]
 
     if not opportunities:
@@ -785,7 +789,7 @@ def _build_expansion_indications_table(opportunities: list[dict], styles) -> lis
         ind = o.get("indication") or "N/A"
         rank = phase_rank(o.get("phase"))
         if rank not in (1, 2, 3, 4):
-            continue  # phase not recognized - doesn't fit the fixed 4-row structure
+            continue  # phase not recognized - excluded from the phase-bucketed table
         if ta not in ta_phase_to_indications:
             ta_phase_to_indications[ta] = {1: [], 2: [], 3: [], 4: []}
         if ind not in ta_phase_to_indications[ta][rank]:
@@ -798,18 +802,24 @@ def _build_expansion_indications_table(opportunities: list[dict], styles) -> lis
     striped = False
 
     for ta, phase_map in ta_phase_to_indications.items():
+        # Only phases with at least one indication get a row - an empty
+        # phase for this therapy area is skipped entirely.
+        populated_phases = [(rank, label) for rank, label in _PHASE_BUCKETS if phase_map.get(rank)]
+        if not populated_phases:
+            continue
+
         start_row = row_idx
-        for rank, label in _PHASE_BUCKETS:
-            indications = phase_map.get(rank) or []
-            indications_text = ", ".join(indications) if indications else "\u2014"
+        for rank, label in populated_phases:
+            indications = phase_map[rank]
             table_data.append([
-                Paragraph(escape_html(ta), ta_cell_style) if rank == 1 else "",
+                Paragraph(escape_html(ta), ta_cell_style) if rank == populated_phases[0][0] else "",
                 label,
-                Paragraph(escape_html(indications_text), cell_style),
+                Paragraph(escape_html(", ".join(indications)), cell_style),
             ])
             row_idx += 1
         end_row = row_idx - 1
-        # Merge the Therapy Area cell across this TA's 4 rows.
+        # Merge the Therapy Area cell across however many phase rows this
+        # therapy area ended up with (a no-op if there's only one row).
         span_commands.append(("SPAN", (0, start_row), (0, end_row)))
         # Stripe by TA block (not by individual row) so the alternating
         # background reads cleanly across the merged cell.
