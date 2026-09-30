@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from medical_potential.config import (
     BQ_DATASET_ID,
     CLINICAL_EFFICACY_TABLE,
-    DRUG_NAME,
     PROJECT_ID,
 )
 from medical_potential.gcp_utils import get_bq_client
@@ -28,6 +27,7 @@ from medical_potential.label_expansion_opportunity.indication_extractor.utils im
     gemini_generate,
     gemini_generate_with_timeout,
 )
+from medical_potential.label_expansion_opportunity.label_expansion_opportunity import DRUG_NAME
 
 from ..bq_utils import LE_TABLE, fetch_existing_indication_rows, fetch_existing_trial_ids
 
