@@ -16,9 +16,26 @@ Runs the full label-expansion pipeline for exactly one drug:
 **Score Calculation (Step 6) — Secondary indications only:**
     6.  Select the best trial per TA-I, compute Final Score, push to BQ.
 
-Use ``start_from`` to skip earlier stages entirely (e.g. re-run only
+Behaviour is controlled by ``START_FROM`` in ``medical_potential/config.py``:
+
+    START_FROM: str  — which stage to start at; skips every stage before it,
+                        reusing whatever is already in BigQuery from a prior
+                        run instead of re-discovering/re-resolving it. One of
+                        ``"discovery"`` (default), ``"moa_mapping"``,
+                        ``"indication_mapping"``, or ``"scoring"``. See
+                        ``PIPELINE_STAGES`` / the docstring below for what
+                        each value skips.
+
+Set ``START_FROM`` to skip earlier stages entirely (e.g. re-run only
 indication mapping + scoring against a ``LE_TABLE`` that's already
 populated, without re-paying for discovery's search-grounded Gemini calls).
+
+Module responsibilities:
+  - ``bq_utils.py``                  — merge module results, push to BigQuery
+  - ``indication_extractor/``        — trial_analyser, fda_fetcher, web_analyser
+  - ``ot_mapping/``                  — MOA + indication -> Open Targets mapping
+  - ``scoring/``                     — trial selection, Final Score calculation
+  - ``generate_report_and_rationale/`` — PDF report + rationale generation
 
 Run with:
     python -m medical_potential.label_expansion_opportunity.label_expansion_opportunity
@@ -28,7 +45,7 @@ from __future__ import annotations
 
 import logging
 
-from medical_potential.config import DRUG_NAME
+from medical_potential.config import DRUG_NAME, START_FROM
 
 from .bq_utils import merge_results, push_to_bigquery
 from .indication_extractor import analyse_trials, analyse_web, analyse_fda
@@ -49,10 +66,10 @@ handler.setFormatter(logging.Formatter("[%(levelname)s] %(message)s"))
 logger.handlers = [handler]
 
 # ==============================
-# PIPELINE STAGES (for start_from)
+# PIPELINE STAGES (for START_FROM)
 # ==============================
 # Ordered so index comparison ("has stage X already happened by the time
-# we start_from Y") is a simple list-index lookup.
+# we START_FROM Y") is a simple list-index lookup.
 PIPELINE_STAGES = ("discovery", "moa_mapping", "indication_mapping", "scoring")
 
 
@@ -61,12 +78,12 @@ def label_expansion(
     drug_details_table: str = "drug_details",
     target_ensembl_ids: list[str] | None = None,
     run_ot_mapping: bool = True,
-    start_from: str = "discovery",
     generate_report: bool = True,
 ) -> dict:
     """Run the full Label Expansion Opportunity pipeline for one drug.
 
-    Executes a 7-step pipeline:
+    Behaviour is controlled by ``START_FROM`` in ``medical_potential/config.py``
+    (see module docstring). Executes a 7-step pipeline:
 
     **Indication Discovery (Steps 1-3):**
         1.  Module 1 — trial_analyser: mines registered clinical trials
@@ -110,7 +127,7 @@ def label_expansion(
             to enable Gemini semantic matching (Path A) in indication mapping.
             If ``None`` (default), these are derived automatically - from the
             MOA mapping resolved in Step 4, or (if Step 4 is skipped via
-            ``start_from``) read directly from the already-populated
+            ``START_FROM``) read directly from the already-populated
             ``OT_MOA_TABLE``.
         run_ot_mapping: Whether to run Steps 4-6. Set ``False`` to only
             discover indications without OT resolution or scoring.
@@ -118,22 +135,24 @@ def label_expansion(
             generation, then upload to GCS/BigQuery). Adds two Gemini calls,
             two GCS uploads (each with an archived copy), and one BigQuery
             append per drug on top of Steps 1-6; set ``False`` to skip.
-        start_from: Which stage to start at - skips every stage before it,
-            reusing whatever is already in BigQuery from a prior run
-            instead of re-discovering/re-resolving it. One of:
-              - ``"discovery"`` (default): run everything, Steps 1-6.
-              - ``"moa_mapping"``: skip Steps 1/1b/2/3 (discovery) entirely.
-                Assumes ``LE_TABLE`` already has this drug's indications.
-                Starts at Step 4.
-              - ``"indication_mapping"``: skip discovery AND Step 4 (MOA
-                mapping). Target Ensembl IDs are read directly from
-                ``OT_MOA_TABLE`` (already populated by a prior run) unless
-                ``target_ensembl_ids`` is passed explicitly. Starts at Step 5.
-              - ``"scoring"``: skip everything except Step 6. Assumes both
-                ``LE_TABLE`` and ``OT_DISEASE_TABLE`` are already populated
-                for this drug.
-            Invalid values raise ``ValueError``. Step 7 always runs last
-            (governed only by ``generate_report``), regardless of ``start_from``.
+
+    ``START_FROM`` (in ``medical_potential/config.py``) controls which stage
+    to start at - skips every stage before it, reusing whatever is already
+    in BigQuery from a prior run instead of re-discovering/re-resolving it.
+    One of:
+      - ``"discovery"`` (default): run everything, Steps 1-6.
+      - ``"moa_mapping"``: skip Steps 1/1b/2/3 (discovery) entirely.
+        Assumes ``LE_TABLE`` already has this drug's indications.
+        Starts at Step 4.
+      - ``"indication_mapping"``: skip discovery AND Step 4 (MOA
+        mapping). Target Ensembl IDs are read directly from
+        ``OT_MOA_TABLE`` (already populated by a prior run) unless
+        ``target_ensembl_ids`` is passed explicitly. Starts at Step 5.
+      - ``"scoring"``: skip everything except Step 6. Assumes both
+        ``LE_TABLE`` and ``OT_DISEASE_TABLE`` are already populated
+        for this drug.
+    Invalid values raise ``ValueError``. Step 7 always runs last
+    (governed only by ``generate_report``), regardless of ``START_FROM``.
 
     Returns:
         dict with keys: ``drug_name``, ``merged_rows``, ``moa_mappings``,
@@ -148,23 +167,23 @@ def label_expansion(
         raise TypeError(
             f"label_expansion() accepts exactly one drug name (str), got: {drug_name!r}"
         )
-    if start_from not in PIPELINE_STAGES:
+    if START_FROM not in PIPELINE_STAGES:
         raise ValueError(
-            f"start_from must be one of {PIPELINE_STAGES}, got: {start_from!r}"
+            f"START_FROM must be one of {PIPELINE_STAGES}, got: {START_FROM!r}"
         )
-    stage_index = PIPELINE_STAGES.index(start_from)
+    stage_index = PIPELINE_STAGES.index(START_FROM)
 
     logger.info(
-        "[LABEL_EXPANSION] Starting Label Expansion Opportunity pipeline for '%s' (start_from=%r)",
-        drug_name, start_from,
+        "[LABEL_EXPANSION] Starting Label Expansion Opportunity pipeline for '%s' (START_FROM=%r)",
+        drug_name, START_FROM,
     )
 
     # ── Steps 1-3: Indication Discovery ─────────────────────────────────────
     if stage_index > PIPELINE_STAGES.index("discovery"):
         logger.info(
-            "[LABEL_EXPANSION] Steps 1-3: Skipped (start_from=%r) — reusing indications "
+            "[LABEL_EXPANSION] Steps 1-3: Skipped (START_FROM=%r) — reusing indications "
             "already in LE_TABLE for '%s'",
-            start_from, drug_name,
+            START_FROM, drug_name,
         )
         merged_rows = fetch_le_rows(drug_name)
         n_primary = sum(1 for r in merged_rows if (r.get("indication_type") or "").lower() == "primary")
@@ -242,9 +261,9 @@ def label_expansion(
             logger.exception("[LABEL_EXPANSION] Step 4 failed for '%s'", drug_name)
     elif run_ot_mapping:
         logger.info(
-            "[LABEL_EXPANSION] Step 4: Skipped (start_from=%r) — reading target Ensembl ID(s) "
+            "[LABEL_EXPANSION] Step 4: Skipped (START_FROM=%r) — reading target Ensembl ID(s) "
             "directly from OT_MOA_TABLE instead",
-            start_from,
+            START_FROM,
         )
         existing_moas = fetch_existing_mappings(OT_MOA_TABLE, "moa")
         moa_mappings = [
@@ -293,9 +312,9 @@ def label_expansion(
             logger.exception("[LABEL_EXPANSION] Step 5 failed for '%s'", drug_name)
     elif run_ot_mapping:
         logger.info(
-            "[LABEL_EXPANSION] Step 5: Skipped (start_from=%r) — reusing indications "
+            "[LABEL_EXPANSION] Step 5: Skipped (START_FROM=%r) — reusing indications "
             "already in OT_DISEASE_TABLE",
-            start_from,
+            START_FROM,
         )
     else:
         logger.info("[LABEL_EXPANSION] Step 5: Skipped (run_ot_mapping=False)")
