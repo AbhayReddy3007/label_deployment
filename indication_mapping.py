@@ -31,11 +31,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from google.cloud import bigquery
 
-from medical_potential.config import BQ_DATASET_ID, DRUG_NAME, PROJECT_ID
+from medical_potential.config import BQ_DATASET_ID, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
 from ..bq_utils import LE_TABLE
 from ..indication_extractor.utils import extract_json as extract_json_utils, gemini_generate
+from ..label_expansion_opportunity import DRUG_NAME
 
 from .ot_utils import (
     OT_DISEASE_TABLE,
