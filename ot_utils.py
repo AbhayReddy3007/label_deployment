@@ -17,16 +17,10 @@ from datetime import datetime, timezone
 import requests
 from google.cloud import bigquery
 
-from medical_potential.config import BQ_DATASET_ID, PROJECT_ID
+from medical_potential.config import BQ_DATASET_ID, OT_DISEASE_TABLE, OT_MOA_TABLE, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
 logger = logging.getLogger(__name__)
-
-# ==============================
-# TABLE NAMES
-# ==============================
-OT_MOA_TABLE = "ot_moa_mapping"
-OT_DISEASE_TABLE = "ot_disease_mapping"
 
 # ==============================
 # OT API
