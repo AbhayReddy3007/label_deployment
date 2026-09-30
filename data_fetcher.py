@@ -35,13 +35,13 @@ from medical_potential.config import (
     BQ_DATASET_ID,
     CLINICAL_TRIALS_SERIOUS_SAFETY_DATA,
     DATA_FETCHER_TABLE,
-    DRUG_NAME,
     PROJECT_ID,
 )
 from medical_potential.gcp_utils import get_bq_client
 
 from ..bq_utils import LE_TABLE
 from ..indication_extractor.utils import extract_json, gemini_generate_with_timeout
+from ..label_expansion_opportunity import DRUG_NAME
 from ..ot_mapping.indication_mapping import normalize_indication
 from ..ot_mapping.moa_mapping import fetch_moa_for_drug
 from ..ot_mapping.ot_utils import OT_DISEASE_TABLE, OT_MOA_TABLE, fetch_existing_mappings, ot_post
