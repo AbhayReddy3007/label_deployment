@@ -22,9 +22,10 @@ import re
 
 from google.cloud import bigquery
 
-from medical_potential.config import BQ_DATASET_ID, DRUG_NAME, PROJECT_ID
+from medical_potential.config import BQ_DATASET_ID, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
+from ..label_expansion_opportunity import DRUG_NAME
 from .ot_utils import (
     OT_MOA_TABLE,
     fetch_existing_mappings,
