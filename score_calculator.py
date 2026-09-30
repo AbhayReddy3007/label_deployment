@@ -36,9 +36,8 @@ import re
 
 import pandas as pd
 
-from medical_potential.config import DRUG_NAME
-
 from ..bq_utils import push_label_expansion_opportunity, push_score_calculation
+from ..label_expansion_opportunity import DRUG_NAME
 from .trial_selector import phase_rank, select_trials
 
 logger = logging.getLogger(__name__)
