@@ -1,11 +1,32 @@
-[ERROR] [LABEL_EXPANSION] Step 6 failed for 'Tirzepatide'
-Traceback (most recent call last):
-  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\label_expansion_opportunity.py", line 308, in label_expansion
-    score_rows = run_score_calculation(drug_name=drug_name, push=True, secondary_only=True)
-                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\scoring\score_calculator.py", line 605, in run_score_calculation
-    push_score_calculation(result_rows)
-  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\bq_utils.py", line 457, in push_score_calculation
-    len(insert_rows), table_id, ", ".join(drug_names),
-                                          ^^^^^^^^^^
-NameError: name 'drug_names' is not defined
+---------------------------------------------------------------------------
+ImportError                               Traceback (most recent call last)
+Cell In[2], line 1
+----> 1 from medical_potential.label_expansion_opportunity.label_expansion_opportunity import label_expansion_opportunity
+
+File ~\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\__init__.py:20
+      1 """Label Expansion Opportunity pillar.
+      2 
+      3 Re-exports the single entry-point ``label_expansion`` for external callers.
+   (...)     17 steps and pushes results to BigQuery.
+     18 """
+---> 20 from .label_expansion_opportunity import label_expansion
+     22 __all__ = ["label_expansion"]
+
+File ~\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\label_expansion_opportunity.py:68
+     61 from medical_potential.gcp_utils import (
+     62     append_dimension_score_to_bigquery,
+     63     upload_dimension_payload_cache_to_gcs,
+     64     upload_dimension_report_pdf_to_gcs,
+     65 )
+     67 from .bq_utils import merge_results, push_to_bigquery
+---> 68 from .generate_report_and_rationale import (
+     69     generate_label_expansion_rationale,
+     70     generate_label_expansion_report_bytes,
+     71 )
+...
+     24     PROCESS_INDICATIONS,
+   (...)     29     gemini_generate_with_timeout,
+     30 )
+
+ImportError: cannot import name 'DRUG_NAME' from 'medical_potential.config' (C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\config.py)
+Output is truncated. View as a scrollable element or open in a text editor. Adjust cell output settings...
