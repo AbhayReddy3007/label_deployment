@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import logging
 
-from medical_potential.config import DRUG_NAME
 from medical_potential.label_expansion_opportunity.indication_extractor.utils import (
     INDICATIONS_PER_CALL,
     PROCESS_INDICATIONS,
@@ -20,6 +19,7 @@ from medical_potential.label_expansion_opportunity.indication_extractor.utils im
     extract_json,
     gemini_generate,
 )
+from medical_potential.label_expansion_opportunity.label_expansion_opportunity import DRUG_NAME
 
 from ..bq_utils import fetch_existing_indication_rows
 
