@@ -45,7 +45,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-from medical_potential.config import BQ_DATASET_ID, LABEL_EXPANSION_OPPORTUNITY_TABLE, PROJECT_ID
+from medical_potential.config import BQ_DATASET_ID, LE_SCORE_CALCULATION_TABLE, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
 from ..indication_extractor.utils import gemini_generate
@@ -59,19 +59,21 @@ GREY = colors.HexColor("#666666")
 DARK_TEXT = colors.HexColor("#1A1A2E")
 LIGHT_BG = colors.HexColor("#F5F7FA")
 
-# Columns pulled from LABEL_EXPANSION_OPPORTUNITY_TABLE (config.py) when a
-# report is generated standalone (no in-memory score_rows available).
-# NOTE: "l_raw_ta" as given did not match this pipeline's actual schema
-# (score_calculator.py / LE_SCORE_SCHEMA uses "b_raw_ta", following the
-# established b_raw_ind/b_ind, b_raw_ta/b_ta naming pattern) - corrected
-# here. Flag if this table's real column is actually named differently.
+# Columns actually present in LABEL_EXPANSION_OPPORTUNITY_TABLE (see
+# LABEL_EXPANSION_OPPORTUNITY_SCHEMA in bq_utils.py, filled by
+# score_calculator.py's push_label_expansion_opportunity() immediately
+# after LE_SCORE_CALCULATION_TABLE - a curated subset of that fuller
+# table). Used only when a report is generated standalone (no in-memory
+# score_rows available). Note this subset does NOT include trial-level
+# detail (trial_id, primary_region, dosage, drug_arm_size_n) or the raw
+# trial-quality weights (w_geo, w_dose, w_sample) - those are only
+# available when score_rows comes from a live pipeline run in memory.
 LE_OPPORTUNITY_COLUMNS = [
-    "drug_name", "indication", "therapy_area", "ta_i", "ot_disease_name",
-    "trial_id", "phase", "primary_region", "dosage", "drug_arm_size_n",
-    "prior", "maturity_weight", "effective_indications", "effective_therapy_areas",
-    "w_geo", "w_dose", "w_sample", "q_i", "e_phase_i", "e_i", "link", "link_ta",
-    "l_ind", "b_raw_ind", "b_ind", "l_ta", "b_raw_ta", "b_ta", "b",
-    "overall_coherence", "c", "final_score", "created_at", "updated_at",
+    "drug_name", "indication", "ot_disease_name", "therapy_area", "ta_i",
+    "phase", "association_score", "prior", "maturity_weight",
+    "effective_indications", "effective_therapy_areas", "q_i", "e_phase_i",
+    "e_i", "link_ta", "b_ind", "b_ta", "b", "overall_coherence", "c",
+    "final_score",
 ]
 
 # How many of the drug's highest-scoring opportunities to send to the LLM
@@ -91,18 +93,27 @@ _SECTION_HEADINGS = [
 # FETCH (standalone report generation, no in-memory score_rows)
 # ==============================
 def fetch_score_rows(drug_name: str) -> list[dict]:
-    """Fetches this drug's rows directly from ``LABEL_EXPANSION_OPPORTUNITY_TABLE``
+    """Fetches this drug's rows from the latest run in ``LE_SCORE_CALCULATION_TABLE``
     (see ``LE_OPPORTUNITY_COLUMNS`` for exactly which columns), so a report
     can be generated for a drug that was already scored in a previous run,
-    without needing a live ``score_rows`` list in memory."""
+    without needing a live ``score_rows`` list in memory.
+
+    Since ``LE_SCORE_CALCULATION_TABLE`` is append-only (historical runs
+    accumulate), rows are filtered to the latest ``created_at`` timestamp
+    for this drug so only the most recent pipeline run is used."""
     bq_client = get_bq_client()
-    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LABEL_EXPANSION_OPPORTUNITY_TABLE}"
+    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LE_SCORE_CALCULATION_TABLE}"
     cols = ", ".join(LE_OPPORTUNITY_COLUMNS)
 
     query = f"""
         SELECT {cols}
         FROM `{table_id}`
         WHERE LOWER(drug_name) = LOWER(@drug_name)
+          AND created_at = (
+              SELECT MAX(created_at)
+              FROM `{table_id}`
+              WHERE LOWER(drug_name) = LOWER(@drug_name)
+          )
     """
     job_config = bigquery.QueryJobConfig(
         query_parameters=[bigquery.ScalarQueryParameter("drug_name", "STRING", drug_name)]
@@ -112,10 +123,10 @@ def fetch_score_rows(drug_name: str) -> list[dict]:
         rows = [dict(row) for row in results]
     except Exception:
         logger.exception(
-            "[GENERATE_REPORT] Failed to fetch '%s' from %s", drug_name, LABEL_EXPANSION_OPPORTUNITY_TABLE,
+            "[GENERATE_REPORT] Failed to fetch '%s' from %s", drug_name, LE_SCORE_CALCULATION_TABLE,
         )
         return []
-    logger.info("[GENERATE_REPORT] Fetched %d row(s) for '%s' from %s", len(rows), drug_name, LABEL_EXPANSION_OPPORTUNITY_TABLE)
+    logger.info("[GENERATE_REPORT] Fetched %d row(s) for '%s' from %s", len(rows), drug_name, LE_SCORE_CALCULATION_TABLE)
     return rows
 
 
