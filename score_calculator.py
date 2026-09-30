@@ -38,7 +38,7 @@ import pandas as pd
 
 from medical_potential.config import DRUG_NAME
 
-from ..bq_utils import push_score_calculation
+from ..bq_utils import push_label_expansion_opportunity, push_score_calculation
 from .trial_selector import phase_rank, select_trials
 
 logger = logging.getLogger(__name__)
@@ -551,7 +551,9 @@ def run_score_calculation(drug_name: str = DRUG_NAME, push: bool = True, seconda
 
     1. Select the best trial per TA-I (via ``trial_selector``).
     2. Run all 16 derived-column calculations in order.
-    3. Optionally push the result to ``LE_SCORE_CALCULATION_TABLE``.
+    3. Optionally push the result to ``LE_SCORE_CALCULATION_TABLE`` (full
+       detail) and ``LABEL_EXPANSION_OPPORTUNITY_TABLE`` (curated subset,
+       filled immediately after, from the same rows).
 
     Args:
         drug_name: the drug/molecule name.
@@ -601,5 +603,9 @@ def run_score_calculation(drug_name: str = DRUG_NAME, push: bool = True, seconda
 
     if push:
         push_score_calculation(result_rows)
+        # LABEL_EXPANSION_OPPORTUNITY_TABLE is filled with a curated column
+        # subset immediately after LE_SCORE_CALCULATION_TABLE, from the
+        # exact same result_rows, so the two never drift out of sync.
+        push_label_expansion_opportunity(result_rows)
 
     return result_rows
