@@ -23,8 +23,7 @@ import re
 
 import pandas as pd
 
-from medical_potential.config import DRUG_NAME
-
+from ..label_expansion_opportunity import DRUG_NAME
 from ..ot_mapping.indication_mapping import normalize_indication
 from ..ot_mapping.ot_utils import OT_DISEASE_TABLE, fetch_existing_mappings
 from .data_fetcher import fetch_and_enrich_trial_data
