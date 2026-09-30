@@ -30,6 +30,11 @@ The remaining pipeline options are local constants defined just below the
 imports in this file (``LE_TARGET_ENSEMBL_IDS``, ``LE_RUN_OT_MAPPING``,
 ``LE_GENERATE_REPORT``) — edit them there directly.
 
+``DRUG_NAME`` is also defined locally in this file (not in config.py) as
+the single source every other module in this package imports its own
+default drug name from (for their standalone/testing entry points -
+label_expansion() itself always requires an explicit drug_name argument).
+
 Set ``START_FROM`` to skip earlier stages entirely (e.g. re-run only
 indication mapping + scoring against a ``LE_TABLE`` that's already
 populated, without re-paying for discovery's search-grounded Gemini calls).
@@ -63,6 +68,20 @@ from medical_potential.gcp_utils import (
     upload_dimension_payload_cache_to_gcs,
     upload_dimension_report_pdf_to_gcs,
 )
+
+# ==============================
+# DEFAULT DRUG NAME (this is the entry point — every other module in this
+# package imports DRUG_NAME from here instead of from config.py)
+# ==============================
+# NOTE: defined here, BEFORE the submodule imports below, on purpose. Those
+# submodules (trial_analyser, web_analyser, fda_fetcher, moa_mapping,
+# indication_mapping, trial_selector, score_calculator, data_fetcher) import
+# DRUG_NAME back from this module. Since this module is still being
+# imported when those submodule imports run, DRUG_NAME must already be
+# defined by that point or those imports will fail. It is only a default
+# for those submodules' own standalone functions - label_expansion() itself
+# always requires an explicit drug_name argument and never uses this value.
+DRUG_NAME = "Semaglutide"
 
 from .bq_utils import merge_results, push_to_bigquery
 from .generate_report_and_rationale import (
