@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 
-from .label_expansion_opportunity import PIPELINE_STAGES, label_expansion, logger
+from .label_expansion_opportunity import label_expansion, logger
 
 # ==============================
 # DRUGS TO RUN
@@ -33,9 +33,12 @@ DRUG_NAMES: list[str] = [
 # ==============================
 # Passed through to label_expansion() for every drug in DRUG_NAMES.
 # See label_expansion_opportunity.py's docstring for what each one does.
+# NOTE: which stage to start at (discovery / moa_mapping / indication_mapping
+# / scoring) is controlled by START_FROM in medical_potential/config.py, not
+# here — it applies to every drug in this batch the same way it applies to
+# a single label_expansion() call.
 DRUG_DETAILS_TABLE = "drug_details"
 RUN_OT_MAPPING = True
-START_FROM = "discovery"  # one of PIPELINE_STAGES: "discovery" | "moa_mapping" | "indication_mapping" | "scoring"
 GENERATE_REPORT = True  # Step 7: rationale + PDF report generation and storage
 
 # If True, a drug that raises an exception is logged and skipped so the
@@ -48,7 +51,6 @@ def run_multiple_drugs(
     drug_names: list[str] = DRUG_NAMES,
     drug_details_table: str = DRUG_DETAILS_TABLE,
     run_ot_mapping: bool = RUN_OT_MAPPING,
-    start_from: str = START_FROM,
     generate_report: bool = GENERATE_REPORT,
     continue_on_error: bool = CONTINUE_ON_ERROR,
 ) -> dict[str, dict | None]:
@@ -58,12 +60,15 @@ def run_multiple_drugs(
         drug_names: list of drug/molecule names to run the pipeline for.
         drug_details_table: forwarded to ``label_expansion()`` for every drug.
         run_ot_mapping: forwarded to ``label_expansion()`` for every drug.
-        start_from: forwarded to ``label_expansion()`` for every drug - one
-            of ``PIPELINE_STAGES`` (see label_expansion_opportunity.py).
         generate_report: forwarded to ``label_expansion()`` for every drug -
             whether to generate + store the rationale and PDF report (Step 7).
         continue_on_error: if ``True`` (default), a drug that raises is
             logged and skipped rather than stopping the whole batch.
+
+    Which stage each drug starts at (discovery / moa_mapping /
+    indication_mapping / scoring) is controlled by ``START_FROM`` in
+    ``medical_potential/config.py`` - it applies uniformly to every drug in
+    ``drug_names``, the same as a single ``label_expansion()`` call.
 
     Returns:
         ``{drug_name: result_dict_or_None}`` - the same dict
@@ -93,7 +98,6 @@ def run_multiple_drugs(
                 drug_name=drug_name,
                 drug_details_table=drug_details_table,
                 run_ot_mapping=run_ot_mapping,
-                start_from=start_from,
                 generate_report=generate_report,
             )
             results[drug_name] = result
