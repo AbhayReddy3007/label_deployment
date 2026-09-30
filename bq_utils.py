@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from google.cloud import bigquery
 
-from medical_potential.config import BQ_DATASET_ID, PROJECT_ID
+from medical_potential.config import BQ_DATASET_ID, LABEL_EXPANSION_OPPORTUNITY_TABLE, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
 logger = logging.getLogger(__name__)
@@ -464,5 +464,109 @@ def push_score_calculation(rows: list[dict]) -> None:
     else:
         logger.info(
             "[LE_SCORE_PUSH] Inserted %d row(s) into %s for drug(s): %s",
+            len(insert_rows), table_id, ", ".join(drug_names),
+        )
+
+
+# ==============================
+# LABEL_EXPANSION_OPPORTUNITY_TABLE (curated subset of LE_SCORE_CALCULATION_TABLE)
+# ==============================
+# A narrower, presentation-oriented view of the score table - only the
+# columns needed to explain a scored opportunity (used by
+# generate_report_and_rationale/generate_report.py for standalone report
+# generation). Deliberately excludes trial-level detail (trial_id,
+# primary_region, dosage, drug_arm_size_n), the raw trial-quality weights
+# (w_geo, w_dose, w_sample), and the un-normalized breadth intermediates
+# (link, l_ind, b_raw_ind, l_ta, b_raw_ta) that LE_SCORE_CALCULATION_TABLE
+# carries for full auditability.
+LABEL_EXPANSION_OPPORTUNITY_SCHEMA: list[bigquery.SchemaField] = [
+    bigquery.SchemaField("drug_name", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("indication", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("ot_disease_name", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("therapy_area", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("ta_i", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("phase", "STRING", mode="NULLABLE"),
+    bigquery.SchemaField("association_score", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("prior", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("maturity_weight", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("effective_indications", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("effective_therapy_areas", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("q_i", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("e_phase_i", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("e_i", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("link_ta", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("b_ind", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("b_ta", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("b", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("overall_coherence", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("c", "FLOAT64", mode="NULLABLE"),
+    bigquery.SchemaField("final_score", "FLOAT64", mode="NULLABLE"),
+]
+
+
+def _ensure_opportunity_table_exists(bq_client: bigquery.Client, table_id: str) -> None:
+    """Creates ``LABEL_EXPANSION_OPPORTUNITY_TABLE`` if missing, and patches
+    in any columns from ``LABEL_EXPANSION_OPPORTUNITY_SCHEMA`` that an
+    already-existing table lacks."""
+    table = bigquery.Table(table_id, schema=LABEL_EXPANSION_OPPORTUNITY_SCHEMA)
+    table = bq_client.create_table(table, exists_ok=True)
+
+    existing_field_names = {f.name for f in table.schema}
+    missing_fields = [f for f in LABEL_EXPANSION_OPPORTUNITY_SCHEMA if f.name not in existing_field_names]
+    if missing_fields:
+        logger.info(
+            "[LE_OPPORTUNITY_PUSH] Table %s is missing column(s) %s - adding them now.",
+            table_id,
+            ", ".join(f.name for f in missing_fields),
+        )
+        table.schema = list(table.schema) + missing_fields
+        bq_client.update_table(table, ["schema"])
+
+
+def push_label_expansion_opportunity(rows: list[dict]) -> None:
+    """Fills ``LABEL_EXPANSION_OPPORTUNITY_TABLE`` with the curated column
+    subset (see ``LABEL_EXPANSION_OPPORTUNITY_SCHEMA``) from ``rows`` -
+    the same rows just pushed to ``LE_SCORE_CALCULATION_TABLE`` by
+    ``push_score_calculation``. Call this immediately after that call, so
+    ``LABEL_EXPANSION_OPPORTUNITY_TABLE`` is always filled right after
+    ``LE_SCORE_CALCULATION_TABLE`` for the same drug(s).
+
+    Same delete-then-insert pattern as ``push_score_calculation``: a
+    drug's prior rows here are deleted and replaced wholesale, since
+    scores are recomputed holistically from the full drug dataset on
+    every run.
+    """
+    if not rows:
+        logger.info("[LE_OPPORTUNITY_PUSH] No rows to push - skipping.")
+        return
+
+    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{LABEL_EXPANSION_OPPORTUNITY_TABLE}"
+
+    bq_client = get_bq_client()
+    _ensure_opportunity_table_exists(bq_client, table_id)
+
+    drug_names = sorted({r.get("drug_name") for r in rows if r.get("drug_name")})
+    if drug_names:
+        delete_query = f"DELETE FROM `{table_id}` WHERE drug_name IN UNNEST(@drug_names)"
+        job_config = bigquery.QueryJobConfig(
+            query_parameters=[bigquery.ArrayQueryParameter("drug_names", "STRING", drug_names)]
+        )
+        bq_client.query(delete_query, job_config=job_config).result()
+
+    insert_rows = []
+    field_type_map = {field.name: field.field_type for field in LABEL_EXPANSION_OPPORTUNITY_SCHEMA}
+    for r in rows:
+        row = {
+            field.name: _json_safe(r.get(field.name), field_type=field_type_map.get(field.name, "STRING"))
+            for field in LABEL_EXPANSION_OPPORTUNITY_SCHEMA
+        }
+        insert_rows.append(row)
+
+    errors = bq_client.insert_rows_json(table_id, insert_rows)
+    if errors:
+        logger.error("[LE_OPPORTUNITY_PUSH] Errors inserting rows into %s: %s", table_id, errors)
+    else:
+        logger.info(
+            "[LE_OPPORTUNITY_PUSH] Inserted %d row(s) into %s for drug(s): %s",
             len(insert_rows), table_id, ", ".join(drug_names),
         )
