@@ -41,15 +41,12 @@ Module responsibilities:
   - ``scoring/``                     — trial selection, Final Score calculation
   - ``generate_report_and_rationale/`` — PDF report + rationale generation
 
-This module takes no command-line input. To run it - from a notebook, a
-script, or anywhere else in Python - import ``label_expansion`` and call it
-with a drug name:
+This module takes no command-line input and has no default drug. To run
+it - from a notebook, a script, or anywhere else in Python - import
+``label_expansion`` and call it with a drug name:
 
     from medical_potential.label_expansion_opportunity.label_expansion_opportunity import label_expansion
     result = label_expansion("Semaglutide")
-
-Running this file directly (``python -m ....label_expansion_opportunity``)
-uses ``DRUG_NAME`` from ``config.py`` instead.
 """
 
 from __future__ import annotations
@@ -58,7 +55,6 @@ import logging
 
 from medical_potential.config import (
     DRUG_DETAILS_TABLE_ID,
-    DRUG_NAME,
     LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
     START_FROM,
 )
@@ -112,7 +108,7 @@ LE_RUN_OT_MAPPING = True
 LE_GENERATE_REPORT = True
 
 
-def label_expansion(drug_name: str = DRUG_NAME) -> dict:
+def label_expansion(drug_name: str) -> dict:
     """Run the full Label Expansion Opportunity pipeline for one drug.
 
     Takes only ``drug_name``. ``START_FROM`` and ``DRUG_DETAILS_TABLE_ID``
@@ -450,9 +446,6 @@ def label_expansion(drug_name: str = DRUG_NAME) -> dict:
     return output
 
 
-if __name__ == "__main__":
-    # No command-line arguments are read. To run this for a specific drug,
-    # call label_expansion("drug_name") directly instead - e.g. from a
-    # notebook or another script (see module docstring). Running this file
-    # directly uses DRUG_NAME from config.py.
-    label_expansion()
+# No __main__ block: this module has no default drug and takes no
+# command-line input. Import label_expansion and call it with a drug name
+# instead (see module docstring) - e.g. from a notebook or another script.
