@@ -437,6 +437,7 @@ def push_score_calculation(rows: list[dict]) -> None:
     bq_client = get_bq_client()
     _ensure_score_table_exists(bq_client, table_id)
 
+    drug_names = sorted({r.get("drug_name") for r in rows if r.get("drug_name")})
     insert_rows = []
     field_type_map = {field.name: field.field_type for field in LE_SCORE_SCHEMA}
     for r in rows:
@@ -535,6 +536,7 @@ def push_label_expansion_opportunity(rows: list[dict]) -> None:
     bq_client = get_bq_client()
     _ensure_opportunity_table_exists(bq_client, table_id)
 
+    drug_names = sorted({r.get("drug_name") for r in rows if r.get("drug_name")})
     insert_rows = []
     field_type_map = {field.name: field.field_type for field in LABEL_EXPANSION_OPPORTUNITY_SCHEMA}
     for r in rows:
