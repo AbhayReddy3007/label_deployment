@@ -41,12 +41,15 @@ Module responsibilities:
   - ``scoring/``                     — trial selection, Final Score calculation
   - ``generate_report_and_rationale/`` — PDF report + rationale generation
 
-Run with:
-    python -m medical_potential.label_expansion_opportunity.label_expansion_opportunity
+This module takes no command-line input. To run it - from a notebook, a
+script, or anywhere else in Python - import ``label_expansion`` and call it
+with a drug name:
 
-Or import and call directly:
     from medical_potential.label_expansion_opportunity.label_expansion_opportunity import label_expansion
-    label_expansion("Semaglutide")
+    result = label_expansion("Semaglutide")
+
+Running this file directly (``python -m ....label_expansion_opportunity``)
+uses ``DRUG_NAME`` from ``config.py`` instead.
 """
 
 from __future__ import annotations
@@ -448,4 +451,8 @@ def label_expansion(drug_name: str = DRUG_NAME) -> dict:
 
 
 if __name__ == "__main__":
+    # No command-line arguments are read. To run this for a specific drug,
+    # call label_expansion("drug_name") directly instead - e.g. from a
+    # notebook or another script (see module docstring). Running this file
+    # directly uses DRUG_NAME from config.py.
     label_expansion()
