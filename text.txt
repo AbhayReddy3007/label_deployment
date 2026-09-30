@@ -1,83 +1,11 @@
-[INFO] [MOA_MAPPING] OT search hit for 'Insulin Receptor Agonist' → ENSG00000171105 | INSR | insulin receptor
-[ERROR] [LABEL_EXPANSION] Step 4 failed for 'Bofanglutide'
+[ERROR] [LABEL_EXPANSION] Step 6 failed for 'Tirzepatide'
 Traceback (most recent call last):
-  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\label_expansion_opportunity.py", line 229, in label_expansion
-    moa_mappings = run_moa_mapping(
-                   ^^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\ot_mapping\moa_mapping.py", line 326, in run_moa_mapping
-    push_mappings(OT_MOA_TABLE, OT_MOA_SCHEMA, new_mappings)
-  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\ot_mapping\ot_utils.py", line 293, in push_mappings
-    bq_client.query(merge_query, job_config=job_config).result()
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\job\query.py", line 1773, in result
-    while not is_job_done():
-              ^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 294, in retry_wrapped_func
-    return retry_target(
-           ^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 156, in retry_target
-    next_sleep = _retry_error_helper(
-                 ^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_base.py", line 214, in _retry_error_helper
-    raise final_exc from source_exc
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 147, in retry_target
-    result = target()
-             ^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\job\query.py", line 1742, in is_job_done
-    self._reload_query_results(retry=retry, **reload_query_results_kwargs)
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\job\query.py", line 1534, in _reload_query_results
-    self._query_results = self._client._get_query_results(
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\client.py", line 2113, in _get_query_results
-    resource = self._call_api(
-               ^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\bigquery\client.py", line 861, in _call_api
-    return call()
-           ^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 294, in retry_wrapped_func
-    return retry_target(
-           ^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 156, in retry_target
-    next_sleep = _retry_error_helper(
-                 ^^^^^^^^^^^^^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_base.py", line 214, in _retry_error_helper
-    raise final_exc from source_exc
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\api_core\retry\retry_unary.py", line 147, in retry_target
-    result = target()
-             ^^^^^^^^
-  File "C:\Users\P90022569\.conda\envs\cognito\Lib\site-packages\google\cloud\_http\__init__.py", line 494, in api_request
-    raise exceptions.from_http_response(response)
-google.api_core.exceptions.BadRequest: 400 GET https://bigquery.googleapis.com/bigquery/v2/projects/cognito-dev-380506/queries/c1761540-3403-4ba7-b503-8e204b38090a?maxResults=0&location=asia-south1&prettyPrint=false: Name indication not found inside T at [4:14]
-
-Location: asia-south1
-Job ID: c1761540-3403-4ba7-b503-8e204b38090a
-
-[WARNING] [LABEL_EXPANSION] No Ensembl ID resolved from MOA mapping — Step 5 will fall back to OT text search only (Path B)
-[INFO] [LABEL_EXPANSION] Step 5: Resolve Secondary indications to OT disease names
-[INFO] [IND_MAPPING] Starting indication mapping for 'Bofanglutide'
-[INFO] [IND_MAPPING] Fetched 5 Secondary indication(s) for 'Bofanglutide' from glp_indications_table
-[INFO] [IND_MAPPING] 5 indication(s) total, 4 already resolved (non-null), 1 to resolve (new + previously null)
-[INFO] [IND_MAPPING] Clustering collapsed 1 indication(s) into 1 canonical cluster(s)
-[INFO] [IND_MAPPING] Direct OT search: checking 1 indication(s) for exact matches
-[INFO] [IND_MAPPING] Direct OT search: 0/1 exact match(es), 1 remaining for Path A
-[INFO] [IND_MAPPING] Path A skipped (no target_ensembl_ids provided)
-[INFO] [IND_MAPPING] Path B: OT text search for 1 indication(s)
-[INFO] [IND_MAPPING] OT search: 'Preterm Birth' → EFO_0006917 (spontaneous preterm birth)
-[INFO] [IND_MAPPING] Validating 1 resolved mapping(s)
-[INFO] [OT_UTILS] Upserted 1 mapping(s) into cognito-dev-380506.data_mart.ot_disease_mapping
-[INFO] [IND_MAPPING] Completed. 5 mapping(s) for 'Bofanglutide'
-[INFO] [LABEL_EXPANSION] Step 5 complete: 5 indication mapping(s)
-[INFO] [LABEL_EXPANSION] Step 6: Compute label-expansion scores (Secondary only)
-[INFO] [DATA_FETCHER] Fetched 8 Secondary glp_indications_table row(s) for 'Bofanglutide' (excluding therapy_area = 'Other'/NULL)
-[INFO] [MOA_MAPPING] Fetched 3 MOA(s) for 'Bofanglutide': ['Glucagon Like Peptide 1 Receptor Agonist', 'Insulin Receptor Agonist', 'Glucagon Like Peptide 1 Receptor Agonist']
-[INFO] [DATA_FETCHER] Resolved 1 target Ensembl ID(s) for 'Bofanglutide' from ot_moa_mapping: ['ENSG00000112164']
-[INFO] [DATA_FETCHER] Fetched 1127 target-disease association score(s) from Open Targets for 1 target(s)
-[INFO] [DATA_FETCHER] association_score resolved for 7/8 row(s) via Open Targets
-[INFO] [DATA_FETCHER] 4/7 trial row(s) need enrichment: ['CTR20255174', 'CTR20261127', 'CTRI202310058944', 'NCT07501832']
-[INFO] [DATA_FETCHER] data_fetched_le: found 0/4 trial(s) already cached - skipping re-fetch for those
-[INFO] [DATA_FETCHER] clinical_trials_serious_safety_data: matched 4/4 trial(s)
-[INFO] [DATA_FETCHER] Gemini fallback for 4 trial(s) in batches of 5, using 10 workers
-[INFO] AFC is enabled with max remote calls: 10.
-[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
-[INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
-[WARNING] [UTILS] Empty response with Search grounding (attempt 1/2) — retrying same config
-[INFO] AFC is enabled with max remote calls: 10.
+  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\label_expansion_opportunity.py", line 308, in label_expansion
+    score_rows = run_score_calculation(drug_name=drug_name, push=True, secondary_only=True)
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\scoring\score_calculator.py", line 605, in run_score_calculation
+    push_score_calculation(result_rows)
+  File "C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\bq_utils.py", line 457, in push_score_calculation
+    len(insert_rows), table_id, ", ".join(drug_names),
+                                          ^^^^^^^^^^
+NameError: name 'drug_names' is not defined
