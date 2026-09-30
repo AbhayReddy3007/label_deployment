@@ -14,16 +14,16 @@ from datetime import datetime, timezone
 
 from google.cloud import bigquery
 
-from medical_potential.config import BQ_DATASET_ID, LABEL_EXPANSION_OPPORTUNITY_TABLE, PROJECT_ID
+from medical_potential.config import (
+    BQ_DATASET_ID,
+    LABEL_EXPANSION_OPPORTUNITY_TABLE,
+    LE_SCORE_CALCULATION_TABLE,
+    LE_TABLE,
+    PROJECT_ID,
+)
 from medical_potential.gcp_utils import get_bq_client
 
 logger = logging.getLogger(__name__)
-
-# ==============================
-# TABLE NAMES
-# ==============================
-LE_TABLE = "glp_indications_table"
-LE_SCORE_CALCULATION_TABLE = "label_expansion_score_calculation"
 
 
 # ==============================
@@ -366,7 +366,6 @@ LE_SCORE_SCHEMA: list[bigquery.SchemaField] = [
     bigquery.SchemaField("c", "FLOAT64", mode="NULLABLE"),
     bigquery.SchemaField("final_score", "FLOAT64", mode="NULLABLE"),
     bigquery.SchemaField("created_at", "TIMESTAMP", mode="NULLABLE"),
-    bigquery.SchemaField("updated_at", "TIMESTAMP", mode="NULLABLE"),
 ]
 
 
@@ -438,24 +437,15 @@ def push_score_calculation(rows: list[dict]) -> None:
     bq_client = get_bq_client()
     _ensure_score_table_exists(bq_client, table_id)
 
-    drug_names = sorted({r.get("drug_name") for r in rows if r.get("drug_name")})
-    if drug_names:
-        delete_query = f"DELETE FROM `{table_id}` WHERE drug_name IN UNNEST(@drug_names)"
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ArrayQueryParameter("drug_names", "STRING", drug_names)]
-        )
-        bq_client.query(delete_query, job_config=job_config).result()
-
     insert_rows = []
     field_type_map = {field.name: field.field_type for field in LE_SCORE_SCHEMA}
     for r in rows:
         row = {
             field.name: _json_safe(r.get(field.name), field_type=field_type_map.get(field.name, "STRING"))
             for field in LE_SCORE_SCHEMA
-            if field.name not in ("created_at", "updated_at")
+            if field.name not in ("created_at",)
         }
         row["created_at"] = now
-        row["updated_at"] = now
         insert_rows.append(row)
 
     errors = bq_client.insert_rows_json(table_id, insert_rows)
@@ -544,14 +534,6 @@ def push_label_expansion_opportunity(rows: list[dict]) -> None:
 
     bq_client = get_bq_client()
     _ensure_opportunity_table_exists(bq_client, table_id)
-
-    drug_names = sorted({r.get("drug_name") for r in rows if r.get("drug_name")})
-    if drug_names:
-        delete_query = f"DELETE FROM `{table_id}` WHERE drug_name IN UNNEST(@drug_names)"
-        job_config = bigquery.QueryJobConfig(
-            query_parameters=[bigquery.ArrayQueryParameter("drug_names", "STRING", drug_names)]
-        )
-        bq_client.query(delete_query, job_config=job_config).result()
 
     insert_rows = []
     field_type_map = {field.name: field.field_type for field in LABEL_EXPANSION_OPPORTUNITY_SCHEMA}
