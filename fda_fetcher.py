@@ -23,11 +23,9 @@ import re
 
 import requests
 
-from medical_potential.config import DRUG_NAME
-
-from .utils import PROCESS_INDICATIONS, SECONDARY_INDICATION_CRITERIA, extract_json, gemini_generate
-
 from ..bq_utils import fetch_existing_indication_rows
+from ..label_expansion_opportunity import DRUG_NAME
+from .utils import PROCESS_INDICATIONS, SECONDARY_INDICATION_CRITERIA, extract_json, gemini_generate
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +318,16 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
     finding FDA brands and re-fetching/re-extracting label text entirely,
     and instead re-classifies the FDA-sourced indications already sitting
     in ``LE_TABLE`` for this drug - see ``_reprocess_existing_indications``.
+
+    Otherwise (incremental run): FDA-approved labels rarely change, so if
+    this drug already has FDA-sourced rows in ``LE_TABLE`` from a prior
+    run, brand lookup, label fetch, extraction, and classification are
+    all skipped - deduplicating the (expensive: one Gemini call per
+    brand, plus two more for extraction and classification) FDA fetch
+    across repeated runs, instead of re-doing it identically every time.
+    To force a fresh FDA fetch after a real label change, delete this
+    drug's FDA-sourced rows (``trial_id`` ending in ``" + fda"``) from
+    ``LE_TABLE`` first.
     """
     if not isinstance(drug_name, str) or not drug_name.strip():
         raise TypeError(
@@ -330,6 +338,20 @@ def analyse(drug_name: str = DRUG_NAME) -> list[dict]:
         return _reprocess_existing_indications(drug_name)
 
     logger.info("[FDA_FETCHER] Starting FDA indication fetch for '%s'", drug_name)
+
+    # Incremental run: skip the entire FDA fetch (brand lookup, label
+    # fetch, extraction, classification) if this drug's FDA indications
+    # are already in LE_TABLE - FDA-approved labels are stable, so
+    # re-fetching them identically on every run just burns Gemini calls
+    # for no new information.
+    existing_fda_rows = fetch_existing_indication_rows(drug_name, source="fda")
+    if existing_fda_rows:
+        logger.info(
+            "[FDA_FETCHER] %d FDA-sourced row(s) already in LE_TABLE for '%s' - skipping re-fetch. "
+            "Delete these rows first (trial_id ending in ' + fda') to force a fresh FDA fetch.",
+            len(existing_fda_rows), drug_name,
+        )
+        return existing_fda_rows
 
     # Step 1: Find all brands
     brands = _find_brands(drug_name)
