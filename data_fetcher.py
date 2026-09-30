@@ -34,6 +34,7 @@ from google.cloud import bigquery
 from medical_potential.config import (
     BQ_DATASET_ID,
     CLINICAL_TRIALS_SERIOUS_SAFETY_DATA,
+    DATA_FETCHER_TABLE,
     DRUG_NAME,
     PROJECT_ID,
 )
@@ -46,11 +47,6 @@ from ..ot_mapping.moa_mapping import fetch_moa_for_drug
 from ..ot_mapping.ot_utils import OT_DISEASE_TABLE, OT_MOA_TABLE, fetch_existing_mappings, ot_post
 
 logger = logging.getLogger(__name__)
-
-# ==============================
-# TABLE NAMES
-# ==============================
-DATA_FETCHER_TABLE = "data_fetched_le"
 
 # ==============================
 # CONSTANTS
