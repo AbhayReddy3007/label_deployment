@@ -1,20 +1,22 @@
 """Run the Label Expansion Opportunity pipeline for multiple drugs.
 
-``label_expansion_opportunity.label_expansion()`` only accepts one drug
-name at a time. This script is a thin wrapper around it: edit
-``DRUG_NAMES`` below, then run this file, and it calls ``label_expansion()``
-once per drug, in sequence.
+``label_expansion_opportunity.label_expansion()`` takes only a single drug
+name. This script is a thin wrapper around it: edit ``DRUG_NAMES`` below,
+then run this file, and it calls ``label_expansion(drug_name)`` once per
+drug, in sequence.
 
 Nothing in the rest of the package is modified - this script only imports
-and calls the existing, unmodified pipeline entry point.
+and calls the existing, unmodified pipeline entry point. All other pipeline
+options (``START_FROM``, ``LE_DRUG_DETAILS_TABLE``, ``LE_TARGET_ENSEMBL_IDS``,
+``LE_RUN_OT_MAPPING``, ``LE_GENERATE_REPORT``) are controlled by
+``medical_potential/config.py`` and apply uniformly to every drug in this
+batch, the same as a single ``label_expansion()`` call.
 
 Run with:
     python -m medical_potential.label_expansion_opportunity.multiple_drugs
 """
 
 from __future__ import annotations
-
-import logging
 
 from .label_expansion_opportunity import label_expansion, logger
 
@@ -28,19 +30,6 @@ DRUG_NAMES: list[str] = [
     "Semaglutide",
 ]
 
-# ==============================
-# PIPELINE OPTIONS
-# ==============================
-# Passed through to label_expansion() for every drug in DRUG_NAMES.
-# See label_expansion_opportunity.py's docstring for what each one does.
-# NOTE: which stage to start at (discovery / moa_mapping / indication_mapping
-# / scoring) is controlled by START_FROM in medical_potential/config.py, not
-# here — it applies to every drug in this batch the same way it applies to
-# a single label_expansion() call.
-DRUG_DETAILS_TABLE = "drug_details"
-RUN_OT_MAPPING = True
-GENERATE_REPORT = True  # Step 7: rationale + PDF report generation and storage
-
 # If True, a drug that raises an exception is logged and skipped so the
 # rest of the batch still runs. If False, the first failure stops the
 # whole batch immediately.
@@ -49,24 +38,18 @@ CONTINUE_ON_ERROR = True
 
 def run_multiple_drugs(
     drug_names: list[str] = DRUG_NAMES,
-    drug_details_table: str = DRUG_DETAILS_TABLE,
-    run_ot_mapping: bool = RUN_OT_MAPPING,
-    generate_report: bool = GENERATE_REPORT,
     continue_on_error: bool = CONTINUE_ON_ERROR,
 ) -> dict[str, dict | None]:
-    """Runs ``label_expansion()`` once per drug in ``drug_names``, in order.
+    """Runs ``label_expansion(drug_name)`` once per drug in ``drug_names``, in order.
 
     Args:
         drug_names: list of drug/molecule names to run the pipeline for.
-        drug_details_table: forwarded to ``label_expansion()`` for every drug.
-        run_ot_mapping: forwarded to ``label_expansion()`` for every drug.
-        generate_report: forwarded to ``label_expansion()`` for every drug -
-            whether to generate + store the rationale and PDF report (Step 7).
         continue_on_error: if ``True`` (default), a drug that raises is
             logged and skipped rather than stopping the whole batch.
 
-    Which stage each drug starts at (discovery / moa_mapping /
-    indication_mapping / scoring) is controlled by ``START_FROM`` in
+    Every pipeline option other than the drug name (``START_FROM``,
+    ``LE_DRUG_DETAILS_TABLE``, ``LE_TARGET_ENSEMBL_IDS``,
+    ``LE_RUN_OT_MAPPING``, ``LE_GENERATE_REPORT``) is controlled by
     ``medical_potential/config.py`` - it applies uniformly to every drug in
     ``drug_names``, the same as a single ``label_expansion()`` call.
 
@@ -94,12 +77,7 @@ def run_multiple_drugs(
             i, len(drug_names), drug_name,
         )
         try:
-            result = label_expansion(
-                drug_name=drug_name,
-                drug_details_table=drug_details_table,
-                run_ot_mapping=run_ot_mapping,
-                generate_report=generate_report,
-            )
+            result = label_expansion(drug_name)
             results[drug_name] = result
             succeeded.append(drug_name)
             logger.info(
