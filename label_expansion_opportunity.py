@@ -16,15 +16,19 @@ Runs the full label-expansion pipeline for exactly one drug:
 **Score Calculation (Step 6) — Secondary indications only:**
     6.  Select the best trial per TA-I, compute Final Score, push to BQ.
 
-Behaviour is controlled by ``START_FROM`` in ``medical_potential/config.py``:
+``label_expansion(drug_name)`` takes only the drug/molecule name.
 
-    START_FROM: str  — which stage to start at; skips every stage before it,
-                        reusing whatever is already in BigQuery from a prior
-                        run instead of re-discovering/re-resolving it. One of
-                        ``"discovery"`` (default), ``"moa_mapping"``,
-                        ``"indication_mapping"``, or ``"scoring"``. See
-                        ``PIPELINE_STAGES`` / the docstring below for what
-                        each value skips.
+Two options come from ``medical_potential/config.py``:
+
+    START_FROM: str              — which stage to start at (see below).
+    DRUG_DETAILS_TABLE_ID: str   — BQ table holding Mechanism_of_Action.
+    LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME: str
+                                  — dimension name used for GCS uploads and
+                                    the DIM_SCORES_TABLE append in Step 7.
+
+The remaining pipeline options are local constants defined just below the
+imports in this file (``LE_TARGET_ENSEMBL_IDS``, ``LE_RUN_OT_MAPPING``,
+``LE_GENERATE_REPORT``) — edit them there directly.
 
 Set ``START_FROM`` to skip earlier stages entirely (e.g. re-run only
 indication mapping + scoring against a ``LE_TABLE`` that's already
@@ -39,15 +43,33 @@ Module responsibilities:
 
 Run with:
     python -m medical_potential.label_expansion_opportunity.label_expansion_opportunity
+
+Or import and call directly:
+    from medical_potential.label_expansion_opportunity.label_expansion_opportunity import label_expansion
+    label_expansion("Semaglutide")
 """
 
 from __future__ import annotations
 
 import logging
 
-from medical_potential.config import DRUG_NAME, START_FROM
+from medical_potential.config import (
+    DRUG_DETAILS_TABLE_ID,
+    DRUG_NAME,
+    LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
+    START_FROM,
+)
+from medical_potential.gcp_utils import (
+    append_dimension_score_to_bigquery,
+    upload_dimension_payload_cache_to_gcs,
+    upload_dimension_report_pdf_to_gcs,
+)
 
 from .bq_utils import merge_results, push_to_bigquery
+from .generate_report_and_rationale import (
+    generate_label_expansion_rationale,
+    generate_label_expansion_report_bytes,
+)
 from .indication_extractor import analyse_trials, analyse_web, analyse_fda
 from .indication_extractor.utils import filter_scorable_indications
 from .ot_mapping import run_moa_mapping, run_indication_mapping
@@ -72,18 +94,34 @@ logger.handlers = [handler]
 # we START_FROM Y") is a simple list-index lookup.
 PIPELINE_STAGES = ("discovery", "moa_mapping", "indication_mapping", "scoring")
 
+# ==============================
+# PIPELINE OPTIONS (local — not in config.py)
+# ==============================
+# Optional target Ensembl IDs for Path A semantic matching in indication
+# mapping. If None, these are derived automatically from the MOA mapping
+# resolved in Step 4 (or, if Step 4 is skipped via START_FROM, read
+# directly from the already-populated OT_MOA_TABLE).
+LE_TARGET_ENSEMBL_IDS: list[str] | None = None
+# Whether to run Steps 4-6 (Open Targets mapping + scoring).
+LE_RUN_OT_MAPPING = True
+# Whether to run Step 7 (rationale + PDF report generation, then upload to
+# GCS/BigQuery).
+LE_GENERATE_REPORT = True
 
-def label_expansion(
-    drug_name: str = DRUG_NAME,
-    drug_details_table: str = "drug_details",
-    target_ensembl_ids: list[str] | None = None,
-    run_ot_mapping: bool = True,
-    generate_report: bool = True,
-) -> dict:
+
+def label_expansion(drug_name: str = DRUG_NAME) -> dict:
     """Run the full Label Expansion Opportunity pipeline for one drug.
 
-    Behaviour is controlled by ``START_FROM`` in ``medical_potential/config.py``
-    (see module docstring). Executes a 7-step pipeline:
+    Takes only ``drug_name``. ``START_FROM`` and ``DRUG_DETAILS_TABLE_ID``
+    come from ``medical_potential/config.py``; ``LE_TARGET_ENSEMBL_IDS``,
+    ``LE_RUN_OT_MAPPING``, and ``LE_GENERATE_REPORT`` are local constants
+    defined near the top of this file (see module docstring).
+
+    Usage:
+        from medical_potential.label_expansion_opportunity.label_expansion_opportunity import label_expansion
+        label_expansion("Semaglutide")
+
+    Executes a 7-step pipeline:
 
     **Indication Discovery (Steps 1-3):**
         1.  Module 1 — trial_analyser: mines registered clinical trials
@@ -98,8 +136,9 @@ def label_expansion(
             and upserts into BigQuery.
 
     **Open Targets Mapping (Steps 4-5) — Secondary indications only:**
-        4.  MOA mapping: fetches Mechanism_of_Action from drug_details table,
-            resolves each to an OT target name, pushes to OT_MOA_TABLE.
+        4.  MOA mapping: fetches Mechanism_of_Action from
+            ``DRUG_DETAILS_TABLE_ID``, resolves each to an OT target name,
+            pushes to OT_MOA_TABLE.
         5.  Indication mapping: reads Secondary indications from LE_TABLE,
             resolves each to an OT disease name, pushes to OT_DISEASE_TABLE.
 
@@ -116,25 +155,11 @@ def label_expansion(
             ``upload_dimension_payload_cache_to_gcs`` - each also writes a
             timestamped archived copy), and appends the top score + rationale
             to ``DIM_SCORES_TABLE`` via ``append_dimension_score_to_bigquery``.
-            Dimension name: "Label Expansion Opportunity". Runs only if
-            score rows exist.
+            Dimension name: ``LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME``
+            (from config). Runs only if score rows exist.
 
     Args:
-        drug_name: The drug / molecule name (e.g. "semaglutide").
-        drug_details_table: BQ table name holding drug details with
-            Mechanism_of_Action column.
-        target_ensembl_ids: Optional Ensembl IDs for the drug's gene targets,
-            to enable Gemini semantic matching (Path A) in indication mapping.
-            If ``None`` (default), these are derived automatically - from the
-            MOA mapping resolved in Step 4, or (if Step 4 is skipped via
-            ``START_FROM``) read directly from the already-populated
-            ``OT_MOA_TABLE``.
-        run_ot_mapping: Whether to run Steps 4-6. Set ``False`` to only
-            discover indications without OT resolution or scoring.
-        generate_report: Whether to run Step 7 (rationale + PDF report
-            generation, then upload to GCS/BigQuery). Adds two Gemini calls,
-            two GCS uploads (each with an archived copy), and one BigQuery
-            append per drug on top of Steps 1-6; set ``False`` to skip.
+        drug_name: The drug / molecule name (e.g. "Semaglutide").
 
     ``START_FROM`` (in ``medical_potential/config.py``) controls which stage
     to start at - skips every stage before it, reusing whatever is already
@@ -147,12 +172,12 @@ def label_expansion(
       - ``"indication_mapping"``: skip discovery AND Step 4 (MOA
         mapping). Target Ensembl IDs are read directly from
         ``OT_MOA_TABLE`` (already populated by a prior run) unless
-        ``target_ensembl_ids`` is passed explicitly. Starts at Step 5.
+        ``LE_TARGET_ENSEMBL_IDS`` is set explicitly. Starts at Step 5.
       - ``"scoring"``: skip everything except Step 6. Assumes both
         ``LE_TABLE`` and ``OT_DISEASE_TABLE`` are already populated
         for this drug.
     Invalid values raise ``ValueError``. Step 7 always runs last
-    (governed only by ``generate_report``), regardless of ``START_FROM``.
+    (governed only by ``LE_GENERATE_REPORT``), regardless of ``START_FROM``.
 
     Returns:
         dict with keys: ``drug_name``, ``merged_rows``, ``moa_mappings``,
@@ -249,17 +274,17 @@ def label_expansion(
 
     # ── Step 4: MOA → Open Targets mapping ─────────────────────────────────
     moa_mappings = []
-    if run_ot_mapping and stage_index <= PIPELINE_STAGES.index("moa_mapping"):
+    if LE_RUN_OT_MAPPING and stage_index <= PIPELINE_STAGES.index("moa_mapping"):
         logger.info("[LABEL_EXPANSION] Step 4: Resolve MOA(s) to Open Targets target names")
         try:
             moa_mappings = run_moa_mapping(
                 drug_name=drug_name,
-                drug_details_table=drug_details_table,
+                drug_details_table=DRUG_DETAILS_TABLE_ID,
             )
             logger.info("[LABEL_EXPANSION] Step 4 complete: %d MOA mapping(s)", len(moa_mappings))
         except Exception:
             logger.exception("[LABEL_EXPANSION] Step 4 failed for '%s'", drug_name)
-    elif run_ot_mapping:
+    elif LE_RUN_OT_MAPPING:
         logger.info(
             "[LABEL_EXPANSION] Step 4: Skipped (START_FROM=%r) — reading target Ensembl ID(s) "
             "directly from OT_MOA_TABLE instead",
@@ -274,16 +299,16 @@ def label_expansion(
             logger.warning(
                 "[LABEL_EXPANSION] OT_MOA_TABLE has no existing mapping(s) for '%s' — "
                 "Step 5 will have no target Ensembl IDs for Path A unless "
-                "target_ensembl_ids is passed explicitly",
+                "LE_TARGET_ENSEMBL_IDS is set explicitly",
                 drug_name,
             )
     else:
-        logger.info("[LABEL_EXPANSION] Step 4: Skipped (run_ot_mapping=False)")
+        logger.info("[LABEL_EXPANSION] Step 4: Skipped (LE_RUN_OT_MAPPING=False)")
 
     # ── Step 5: Indication → OT disease mapping (Secondary only) ───────────
     indication_mappings = []
-    if run_ot_mapping and stage_index <= PIPELINE_STAGES.index("indication_mapping"):
-        effective_target_ids = target_ensembl_ids
+    if LE_RUN_OT_MAPPING and stage_index <= PIPELINE_STAGES.index("indication_mapping"):
+        effective_target_ids = LE_TARGET_ENSEMBL_IDS
         if effective_target_ids is None:
             effective_target_ids = [m["ensembl_id"] for m in moa_mappings if m.get("ensembl_id")]
             if effective_target_ids:
@@ -310,18 +335,18 @@ def label_expansion(
             )
         except Exception:
             logger.exception("[LABEL_EXPANSION] Step 5 failed for '%s'", drug_name)
-    elif run_ot_mapping:
+    elif LE_RUN_OT_MAPPING:
         logger.info(
             "[LABEL_EXPANSION] Step 5: Skipped (START_FROM=%r) — reusing indications "
             "already in OT_DISEASE_TABLE",
             START_FROM,
         )
     else:
-        logger.info("[LABEL_EXPANSION] Step 5: Skipped (run_ot_mapping=False)")
+        logger.info("[LABEL_EXPANSION] Step 5: Skipped (LE_RUN_OT_MAPPING=False)")
 
     # ── Step 6: Score calculation (Secondary only) ───────────────────────────
     score_rows = []
-    if run_ot_mapping:
+    if LE_RUN_OT_MAPPING:
         logger.info("[LABEL_EXPANSION] Step 6: Compute label-expansion scores (Secondary only)")
         try:
             score_rows = run_score_calculation(drug_name=drug_name, push=True, secondary_only=True)
@@ -329,32 +354,18 @@ def label_expansion(
         except Exception:
             logger.exception("[LABEL_EXPANSION] Step 6 failed for '%s'", drug_name)
     else:
-        logger.info("[LABEL_EXPANSION] Step 6: Skipped (run_ot_mapping=False)")
+        logger.info("[LABEL_EXPANSION] Step 6: Skipped (LE_RUN_OT_MAPPING=False)")
 
     # ── Step 7: Generate rationale and PDF report, upload to GCS ────────────
-    DIMENSION_NAME = "Label Expansion Opportunity"
-
     rationale = None
     pdf_bytes = None
     report_content = None
     report_gcs_uri = None
     report_archive_gcs_uri = None
     cache_gcs_uri = None
-    if generate_report and run_ot_mapping and score_rows:
+    if LE_GENERATE_REPORT and LE_RUN_OT_MAPPING and score_rows:
         logger.info("[LABEL_EXPANSION] Step 7: Generate rationale and PDF report")
         try:
-            # Local import: avoids a hard dependency on reportlab/GCS for
-            # callers who never touch report generation.
-            from .generate_report_and_rationale import (
-                generate_label_expansion_rationale,
-                generate_label_expansion_report_bytes,
-            )
-            from medical_potential.gcp_utils import (
-                append_dimension_score_to_bigquery,
-                upload_dimension_payload_cache_to_gcs,
-                upload_dimension_report_pdf_to_gcs,
-            )
-
             report_data = {"drug_name": drug_name, "score_rows": score_rows, "merged_rows": merged_rows}
             rationale, rationale_payload = generate_label_expansion_rationale(report_data)
             pdf_bytes, report_content, report_payload = generate_label_expansion_report_bytes(report_data)
@@ -365,7 +376,7 @@ def label_expansion(
 
             try:
                 report_gcs_uri, report_archive_gcs_uri = upload_dimension_report_pdf_to_gcs(
-                    pdf_bytes, drug_name, DIMENSION_NAME,
+                    pdf_bytes, drug_name, LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
                 )
                 cache_gcs_uri = upload_dimension_payload_cache_to_gcs(
                     {
@@ -374,7 +385,7 @@ def label_expansion(
                         "report_content": report_content,
                         "report_payload": report_payload,
                     },
-                    drug_name, DIMENSION_NAME,
+                    drug_name, LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
                 )
                 logger.info(
                     "[LABEL_EXPANSION] Step 7: report -> %s (archived: %s), cache -> %s",
@@ -390,7 +401,7 @@ def label_expansion(
                 top_final_score = (report_content or {}).get("summary_box", {}).get("final_score")
                 append_dimension_score_to_bigquery(
                     molecule_name=drug_name,
-                    dimension_name=DIMENSION_NAME,
+                    dimension_name=LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
                     score=top_final_score,
                     rationale=rationale,
                 )
@@ -404,10 +415,10 @@ def label_expansion(
                 )
         except Exception:
             logger.exception("[LABEL_EXPANSION] Step 7 failed for '%s'", drug_name)
-    elif generate_report and run_ot_mapping and not score_rows:
+    elif LE_GENERATE_REPORT and LE_RUN_OT_MAPPING and not score_rows:
         logger.info("[LABEL_EXPANSION] Step 7: Skipped — no score rows to report on")
     else:
-        logger.info("[LABEL_EXPANSION] Step 7: Skipped (generate_report=False)")
+        logger.info("[LABEL_EXPANSION] Step 7: Skipped (LE_GENERATE_REPORT=False)")
 
     # ── Done ───────────────────────────────────────────────────────────────
     output = {
