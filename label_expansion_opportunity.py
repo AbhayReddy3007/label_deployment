@@ -21,10 +21,13 @@ Runs the full label-expansion pipeline for exactly one drug:
 Two options come from ``medical_potential/config.py``:
 
     START_FROM: str              — which stage to start at (see below).
-    DRUG_DETAILS_TABLE_ID: str   — BQ table holding Mechanism_of_Action.
     LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME: str
                                   — dimension name used for GCS uploads and
                                     the DIM_SCORES_TABLE append in Step 7.
+
+(The BQ table holding Mechanism_of_Action is ``DRUG_DETAILS_FULL_TABLE_ID``
+in config.py - a fully-qualified ``project.dataset.table`` id used directly
+by ``ot_mapping/moa_mapping.py``; this file doesn't need to import it.)
 
 The remaining pipeline options are local constants defined just below the
 imports in this file (``LE_TARGET_ENSEMBL_IDS``, ``LE_RUN_OT_MAPPING``,
@@ -59,7 +62,6 @@ from __future__ import annotations
 import logging
 
 from medical_potential.config import (
-    DRUG_DETAILS_TABLE_ID,
     LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
     START_FROM,
 )
@@ -130,8 +132,8 @@ LE_GENERATE_REPORT = True
 def label_expansion(drug_name: str) -> dict:
     """Run the full Label Expansion Opportunity pipeline for one drug.
 
-    Takes only ``drug_name``. ``START_FROM`` and ``DRUG_DETAILS_TABLE_ID``
-    come from ``medical_potential/config.py``; ``LE_TARGET_ENSEMBL_IDS``,
+    Takes only ``drug_name``. ``START_FROM`` comes from
+    ``medical_potential/config.py``; ``LE_TARGET_ENSEMBL_IDS``,
     ``LE_RUN_OT_MAPPING``, and ``LE_GENERATE_REPORT`` are local constants
     defined near the top of this file (see module docstring).
 
@@ -155,8 +157,8 @@ def label_expansion(drug_name: str) -> dict:
 
     **Open Targets Mapping (Steps 4-5) — Secondary indications only:**
         4.  MOA mapping: fetches Mechanism_of_Action from
-            ``DRUG_DETAILS_TABLE_ID``, resolves each to an OT target name,
-            pushes to OT_MOA_TABLE.
+            ``DRUG_DETAILS_FULL_TABLE_ID`` (config), resolves each to an
+            OT target name, pushes to OT_MOA_TABLE.
         5.  Indication mapping: reads Secondary indications from LE_TABLE,
             resolves each to an OT disease name, pushes to OT_DISEASE_TABLE.
 
@@ -295,10 +297,7 @@ def label_expansion(drug_name: str) -> dict:
     if LE_RUN_OT_MAPPING and stage_index <= PIPELINE_STAGES.index("moa_mapping"):
         logger.info("[LABEL_EXPANSION] Step 4: Resolve MOA(s) to Open Targets target names")
         try:
-            moa_mappings = run_moa_mapping(
-                drug_name=drug_name,
-                drug_details_table=DRUG_DETAILS_TABLE_ID,
-            )
+            moa_mappings = run_moa_mapping(drug_name=drug_name)
             logger.info("[LABEL_EXPANSION] Step 4 complete: %d MOA mapping(s)", len(moa_mappings))
         except Exception:
             logger.exception("[LABEL_EXPANSION] Step 4 failed for '%s'", drug_name)
