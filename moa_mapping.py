@@ -22,7 +22,7 @@ import re
 
 from google.cloud import bigquery
 
-from medical_potential.config import BQ_DATASET_ID, PROJECT_ID
+from medical_potential.config import DRUG_DETAILS_FULL_TABLE_ID
 from medical_potential.gcp_utils import get_bq_client
 
 from ..label_expansion_opportunity import DRUG_NAME
@@ -250,13 +250,15 @@ def resolve_single_moa(moa: str) -> dict:
 # ==============================
 # FETCH MOA FROM BQ
 # ==============================
-def fetch_moa_for_drug(drug_name: str, drug_details_table: str) -> list[str]:
-    """Fetches the distinct Mechanism_of_Action values for a drug from BQ.
+def fetch_moa_for_drug(drug_name: str) -> list[str]:
+    """Fetches the distinct Mechanism_of_Action values for a drug from BQ
+    (``DRUG_DETAILS_FULL_TABLE_ID`` from config - already a fully-qualified
+    ``project.dataset.table`` id).
 
     Returns a list of individual MOA strings (split on ``'; '``).
     """
     bq_client = get_bq_client()
-    table_id = f"{PROJECT_ID}.{BQ_DATASET_ID}.{drug_details_table}"
+    table_id = DRUG_DETAILS_FULL_TABLE_ID
 
     query = f"""
         SELECT
@@ -288,10 +290,10 @@ def fetch_moa_for_drug(drug_name: str, drug_details_table: str) -> list[str]:
 # ==============================
 # ENTRY POINT
 # ==============================
-def run_moa_mapping(drug_name: str = DRUG_NAME, drug_details_table: str = "drug_details") -> list[dict]:
+def run_moa_mapping(drug_name: str = DRUG_NAME) -> list[dict]:
     """Full MOA mapping pipeline for one drug.
 
-    1. Fetch MOAs from BQ drug_details table.
+    1. Fetch MOAs from ``DRUG_DETAILS_FULL_TABLE_ID`` (config).
     2. Check which MOAs are already resolved in ``OT_MOA_TABLE``.
     3. Resolve only the new ones (Phase 1 + Phase 2).
     4. Push new mappings to ``OT_MOA_TABLE``.
@@ -300,7 +302,7 @@ def run_moa_mapping(drug_name: str = DRUG_NAME, drug_details_table: str = "drug_
     logger.info("[MOA_MAPPING] Starting MOA mapping for '%s'", drug_name)
 
     # Step 1: Fetch MOAs
-    moas = fetch_moa_for_drug(drug_name, drug_details_table)
+    moas = fetch_moa_for_drug(drug_name)
     if not moas:
         logger.warning("[MOA_MAPPING] No MOAs found for '%s' — nothing to resolve", drug_name)
         return []
