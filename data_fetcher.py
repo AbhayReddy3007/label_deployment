@@ -132,13 +132,14 @@ def fetch_le_rows(drug_name: str = DRUG_NAME, secondary_only: bool = False) -> l
 # ==============================
 # STEP 2: ASSOCIATION SCORE FROM OPEN TARGETS
 # ==============================
-def fetch_target_ensembl_ids(drug_name: str, drug_details_table: str = "drug_details") -> list[str]:
+def fetch_target_ensembl_ids(drug_name: str) -> list[str]:
     """Resolves this drug's Ensembl target ID(s) by looking up its MOA(s)
-    (fetched fresh from the drug_details table) against ``OT_MOA_TABLE``,
-    the mapping table ``moa_mapping`` already populated in Step 4 of the
-    main pipeline. Returns an empty list if nothing resolves."""
+    (fetched fresh from ``DRUG_DETAILS_FULL_TABLE_ID``) against
+    ``OT_MOA_TABLE``, the mapping table ``moa_mapping`` already populated
+    in Step 4 of the main pipeline. Returns an empty list if nothing
+    resolves."""
     try:
-        moas = fetch_moa_for_drug(drug_name, drug_details_table)
+        moas = fetch_moa_for_drug(drug_name)
     except Exception as exc:
         logger.warning("[DATA_FETCHER] Could not fetch MOA(s) for '%s': %s", drug_name, exc)
         return []
@@ -215,11 +216,11 @@ def fetch_ot_association_scores(target_ensembl_ids: list[str]) -> dict[str, floa
     return scores
 
 
-def apply_association_scores(rows: list[dict], drug_name: str, drug_details_table: str = "drug_details") -> None:
+def apply_association_scores(rows: list[dict], drug_name: str) -> None:
     """Fills ``association_score`` on every row (trial- and web-sourced
     alike, since it's an indication-level target-disease score, not a
     trial-level one) using the Open Targets API. Mutates ``rows`` in place."""
-    target_ids = fetch_target_ensembl_ids(drug_name, drug_details_table)
+    target_ids = fetch_target_ensembl_ids(drug_name)
     if not target_ids:
         logger.warning(
             "[DATA_FETCHER] No target Ensembl ID(s) resolved for '%s' - "
@@ -560,7 +561,7 @@ def gemini_fill_missing(trial_ids: list[str], batch_size: int = GEMINI_TRIALS_PE
 # ==============================
 # ENTRY POINT
 # ==============================
-def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, drug_details_table: str = "drug_details", secondary_only: bool = False) -> list[dict]:
+def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, secondary_only: bool = False) -> list[dict]:
     """Fetches all LE_TABLE rows for a drug and enriches them for scoring.
 
     ``association_score`` (Step 2) is resolved for every row — trial- and
@@ -586,7 +587,7 @@ def fetch_and_enrich_trial_data(drug_name: str = DRUG_NAME, drug_details_table: 
         return []
 
     # Step 2: association_score for every row, via Open Targets.
-    apply_association_scores(rows, drug_name, drug_details_table)
+    apply_association_scores(rows, drug_name)
 
     trial_rows = [r for r in rows if (r.get("data_source") or "").strip().lower() == "trials"]
     non_trial_rows = [r for r in rows if (r.get("data_source") or "").strip().lower() != "trials"]
