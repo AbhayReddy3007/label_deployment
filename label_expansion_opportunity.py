@@ -202,11 +202,12 @@ def label_expansion(drug_name: str) -> dict:
     Returns:
         dict with keys: ``drug_name``, ``merged_rows``, ``moa_mappings``,
         ``indication_mappings``, ``score_rows``, ``rationale``,
-        ``pdf_bytes``, ``report_content``, ``report_gcs_uri`` (the
-        ``gs://`` URI of the uploaded PDF, or ``None``),
-        ``report_archive_gcs_uri`` (the ``gs://`` URI of the timestamped
-        archived PDF copy, or ``None``), ``cache_gcs_uri`` (the ``gs://``
-        URI of the uploaded JSON cache, or ``None``).
+        ``report_content``, ``report_gcs_uri`` (the ``gs://`` URI of the
+        uploaded PDF, or ``None``), ``report_archive_gcs_uri`` (the
+        ``gs://`` URI of the timestamped archived PDF copy, or ``None``),
+        ``cache_gcs_uri`` (the ``gs://`` URI of the uploaded JSON cache, or
+        ``None``). The raw PDF bytes are not included - fetch the PDF from
+        ``report_gcs_uri`` if needed.
     """
     if not isinstance(drug_name, str) or not drug_name.strip():
         raise TypeError(
@@ -415,7 +416,12 @@ def label_expansion(drug_name: str) -> dict:
                 )
 
             try:
-                top_final_score = (report_content or {}).get("summary_box", {}).get("final_score")
+                final_scores = [
+                    r.get("final_score")
+                    for r in score_rows
+                    if isinstance(r, dict) and r.get("final_score") is not None
+                ]
+                top_final_score = max(final_scores) if final_scores else None
                 append_dimension_score_to_bigquery(
                     molecule_name=drug_name,
                     dimension_name=LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
@@ -445,7 +451,6 @@ def label_expansion(drug_name: str) -> dict:
         "indication_mappings": indication_mappings,
         "score_rows": score_rows,
         "rationale": rationale,
-        "pdf_bytes": pdf_bytes,
         "report_content": report_content,
         "report_gcs_uri": report_gcs_uri,
         "report_archive_gcs_uri": report_archive_gcs_uri,
