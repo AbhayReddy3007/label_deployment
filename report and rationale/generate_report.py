@@ -48,8 +48,8 @@ from reportlab.platypus import (
 from medical_potential.config import BQ_DATASET_ID, LE_SCORE_CALCULATION_TABLE, PROJECT_ID
 from medical_potential.gcp_utils import get_bq_client
 
-from ..indication_extractor.utils import gemini_generate
 from ..scoring.trial_selector import phase_rank
+from ..utils import gemini_generate
 
 logger = logging.getLogger(__name__)
 
@@ -907,9 +907,15 @@ def generate_label_expansion_report_bytes(
     ``ssp_report.generate_prompt_safety_report_bytes``. This function does
     NOT upload the PDF itself; the caller uploads it via
     ``medical_potential.gcp_utils.upload_dimension_report_pdf_to_gcs``.
+
+    If ``payload["opportunities"]`` is empty (this drug has no Secondary-
+    classified indications at all, so there was nothing for the scoring
+    pipeline to produce), this short-circuits to a short, explicit "no
+    secondary indications yet" report instead of running the normal
+    Gemini-narrative + methodology-page pipeline below, which expects at
+    least one scored opportunity to describe.
     """
     payload = _prepare_prompt_payload(data)
-    report_data = _extract_report_data(payload)
 
     drug_name = payload.get("drug_name", "Unknown")
     dimension = "Label Expansion Opportunity"
@@ -922,6 +928,51 @@ def generate_label_expansion_report_bytes(
         leftMargin=0.6 * inch, rightMargin=0.6 * inch,
         title=f"{drug_name} - {dimension}",
     )
+
+    if not payload.get("opportunities"):
+        no_secondary_text = (
+            f"There are no secondary indications identified for {drug_name} yet. "
+            f"No label-expansion opportunities have been discovered from clinical "
+            f"trials, FDA-approved labels, or public web sources at this time, so "
+            f"no Final Score could be computed from evidence - it is recorded as "
+            f"0 until secondary indications are identified."
+        )
+        story = [
+            Paragraph(escape_html(dimension), styles["ReportTitle"]),
+            Paragraph(
+                f"Drug: <b>{escape_html(drug_name)}</b>&nbsp;&nbsp;|&nbsp;&nbsp;{escape_html(date.today().isoformat())}",
+                styles["ReportSubtitle"],
+            ),
+            Spacer(1, 4),
+            HRFlowable(width="100%", thickness=1, color=NAVY),
+            Spacer(1, 6),
+            _build_summary_box(
+                styles, num_therapy_areas=0, num_secondary_indications=0, final_score_text="0.00/5",
+            ),
+            Spacer(1, 10),
+            Paragraph("NO SECONDARY INDICATIONS", styles["SectionHeader"]),
+            Spacer(1, 8),
+            Paragraph(escape_html(no_secondary_text), styles["BodyProse"]),
+            Spacer(1, 6),
+            HRFlowable(width="100%", thickness=0.5, color=colors.HexColor("#CCCCCC")),
+            Paragraph(
+                f"Report generated {escape_html(date.today().isoformat())}",
+                styles["FooterText"],
+            ),
+        ]
+        doc.build(story)
+        pdf_bytes = buffer.getvalue()
+        report_content: dict[str, Any] = {
+            "summary_box": {
+                "num_therapy_areas": 0,
+                "num_secondary_indications": 0,
+                "final_score": 0.0,
+            },
+            "sections": {"NO_SECONDARY_INDICATIONS": no_secondary_text},
+        }
+        return pdf_bytes, report_content, payload
+
+    report_data = _extract_report_data(payload)
 
     top_final_score = payload.get("top_final_score")
     final_score_text = f"{top_final_score:.2f}/5" if isinstance(top_final_score, (int, float)) else "N/A"
