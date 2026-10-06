@@ -3,7 +3,7 @@
 Mirrors ``serious_safety_profile``'s ``ssp_rationale.py`` pattern (reduce
 input -> build a short prompt -> call Gemini -> return text + payload), but
 uses this pipeline's own ``gemini_generate`` helper (already handles
-retries/backoff - see ``indication_extractor/utils.py``) instead of a raw
+retries/backoff - see ``label_expansion_opportunity/utils.py``) instead of a raw
 ``genai.Client`` call, and is a plain synchronous function rather than
 ``async``, matching how the rest of this pipeline calls Gemini (no
 ``asyncio`` is used anywhere else in this codebase - parallelism here is
@@ -16,11 +16,21 @@ import json
 import logging
 from typing import Any
 
-from ..indication_extractor.utils import gemini_generate
+from ..utils import gemini_generate
 
 logger = logging.getLogger(__name__)
 
 NOT_GENERATED_MESSAGE = "Rationale has not been generated."
+
+# Returned instead of calling Gemini when a drug has no Secondary-classified
+# indications at all (empty score_rows for that reason, not because of a
+# generation failure) - see label_expansion_opportunity.py Step 7, which
+# only reaches here with empty score_rows when that's the case.
+NO_SECONDARY_INDICATIONS_MESSAGE_TEMPLATE = (
+    "There are no secondary indications identified for {drug_name} yet. "
+    "No label-expansion opportunities have been discovered from clinical "
+    "trials, FDA-approved labels, or public web sources at this time."
+)
 
 # How many of the drug's highest-scoring opportunities to include in the
 # prompt payload - keeps the prompt short, same idea as ssp_rationale.py's
@@ -110,11 +120,14 @@ def generate_label_expansion_rationale(
     payload = _prepare_prompt_payload(data)
 
     if not payload.get("top_opportunities"):
-        logger.warning(
-            "[LABEL_EXPANSION][RATIONALE] No score rows for '%s' - nothing to explain",
+        drug_name = payload.get("drug_name") or "this drug"
+        logger.info(
+            "[LABEL_EXPANSION][RATIONALE] No score rows for '%s' - no secondary indications "
+            "identified yet, skipping Gemini and returning a fixed message instead",
             payload.get("drug_name"),
         )
-        return NOT_GENERATED_MESSAGE, payload
+        rationale = NO_SECONDARY_INDICATIONS_MESSAGE_TEMPLATE.format(drug_name=drug_name)
+        return rationale, payload
 
     prompt = f"""
 You are a concise medical insights writer. Produce a short, plain-text rationale (one sentence or a very short paragraph) that explains the main label expansion opportunities for this drug and what is driving their scores.
