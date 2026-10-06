@@ -35,11 +35,11 @@ from medical_potential.config import (
     BQ_DATASET_ID,
     CLINICAL_TRIALS_SERIOUS_SAFETY_DATA,
     DATA_FETCHER_TABLE,
+    LE_TABLE,
     PROJECT_ID,
 )
 from medical_potential.gcp_utils import get_bq_client
 
-from ..bq_utils import LE_TABLE
 from ..indication_extractor.utils import extract_json, gemini_generate_with_timeout
 from ..label_expansion_opportunity import DRUG_NAME
 from ..ot_mapping.indication_mapping import normalize_indication
@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 # ==============================
 TRIAL_ENRICHMENT_FIELDS = ("primary_region", "drug_arm_size_n", "dosage")
 GEMINI_TRIALS_PER_CALL = 5
-MAX_WORKERS = 10
+MAX_WORKERS = 1
 GEMINI_FILL_TIMEOUT_SECONDS = 90  # scaled by batch size, same as trial_analyser
 GEMINI_FILL_MAX_ATTEMPTS = 2  # retry once on timeout before giving up on a batch
 OT_DISEASE_PAGE_SIZE = 50
