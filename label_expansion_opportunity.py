@@ -15,6 +15,8 @@ Runs the full label-expansion pipeline for exactly one drug:
 
 **Score Calculation (Step 6) — Secondary indications only:**
     6.  Select the best trial per TA-I, compute Final Score, push to BQ.
+        If this drug has no Secondary indications at all, pushes a single
+        drug_name + final_score=0 row to each score table instead.
 
 ``label_expansion(molecule_name)`` takes only the drug/molecule name.
 
@@ -73,7 +75,12 @@ from medical_potential.gcp_utils import (
     upload_dimension_report_pdf_to_gcs,
 )
 
-from .bq_utils import merge_results, push_to_bigquery
+from .bq_utils import (
+    merge_results,
+    push_label_expansion_opportunity,
+    push_score_calculation,
+    push_to_bigquery,
+)
 from .generate_report_and_rationale import (
     generate_label_expansion_rationale,
     generate_label_expansion_report_bytes,
@@ -152,19 +159,28 @@ def label_expansion(molecule_name: str | None = None) -> dict:
 
     **Score Calculation (Step 6) — Secondary indications only:**
         6.  Selects the best trial per TA-I, computes trial weights and
-            a composite Final Score, pushes to LE_SCORE_CALCULATION_TABLE.
+            a composite Final Score, pushes to LE_SCORE_CALCULATION_TABLE
+            (and the curated LABEL_EXPANSION_OPPORTUNITY_TABLE). If this
+            drug has no Secondary indications at all, pushes a single row
+            to each table instead - just ``drug_name`` and
+            ``final_score = 0``, every other column left null - so the
+            drug still appears in both tables.
 
     **Report Generation (Step 7):**
         7.  Generates a short plain-text rationale and a 2-page PDF report
             summarizing the drug's label-expansion opportunities. Uploads
-            the PDF and a combined JSON cache (rationale + report
-            payloads/sections) via the shared ``medical_potential.gcp_utils``
-            helpers (``upload_dimension_report_pdf_to_gcs`` /
-            ``upload_dimension_payload_cache_to_gcs`` - each also writes a
-            timestamped archived copy), and appends the top score + rationale
-            to ``DIM_SCORES_TABLE`` via ``append_dimension_score_to_bigquery``.
-            Dimension name: ``LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME``
-            (from config). Runs only if score rows exist.
+            the PDF via ``upload_dimension_report_pdf_to_gcs`` (which also
+            writes a timestamped archived copy), and appends the top score
+            + rationale to ``DIM_SCORES_TABLE`` via
+            ``append_dimension_score_to_bigquery``. Dimension name:
+            ``LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME`` (from config).
+            Runs if score rows exist, OR if this drug simply has no
+            Secondary indications at all - in the latter case the
+            rationale/report explicitly say so and the Final Score
+            recorded is 0 (not null). If Secondary indications exist but
+            none of them produced a score row for some other reason (e.g.
+            none resolved to an Open Targets disease yet), Step 7 is
+            skipped, same as before.
 
     Args:
         molecule_name: The drug / molecule name (e.g. "Semaglutide"). Required -
@@ -191,9 +207,11 @@ def label_expansion(molecule_name: str | None = None) -> dict:
 
     Returns:
         dict with keys: ``drug_name``, ``merged_rows``, ``moa_mappings``,
-        ``indication_mappings``, ``score_rows``, ``rationale``,
-        ``rationale_payload``, ``report_content``, ``report_payload``,
-        ``top_final_score``, ``report_gcs_uri`` (the ``gs://`` URI of the
+        ``indication_mappings``, ``score_rows``, ``report_data``,
+        ``rationale``, ``rationale_payload``, ``report_content``,
+        ``report_payload``, ``top_final_score`` (``0.0`` when this drug has
+        no Secondary indications at all, ``None`` if no score was computed
+        for any other reason), ``report_gcs_uri`` (the ``gs://`` URI of the
         uploaded PDF, or ``None``), ``report_archive_gcs_uri`` (the
         ``gs://`` URI of the timestamped archived PDF copy, or ``None``),
         and ``cache_gcs_uri`` (the ``gs://`` URI of the uploaded final output
@@ -358,6 +376,14 @@ def label_expansion(molecule_name: str | None = None) -> dict:
     else:
         logger.info("[LABEL_EXPANSION] Step 5: Skipped (LE_RUN_OT_MAPPING=False)")
 
+    # ``no_secondary_indications`` is True only when this drug has ZERO
+    # Secondary-classified rows in LE_TABLE (n_secondary is set in both
+    # branches of Steps 1-3 above). Used below by Step 6 (to record a
+    # Final Score of 0 in the score tables, since there's nothing real
+    # for the scoring pipeline to produce) and by Step 7 (to generate a
+    # rationale/report explaining that, instead of silently skipping).
+    no_secondary_indications = n_secondary == 0
+
     # ── Step 6: Score calculation (Secondary only) ───────────────────────────
     score_rows = []
     if LE_RUN_OT_MAPPING:
@@ -367,10 +393,41 @@ def label_expansion(molecule_name: str | None = None) -> dict:
             logger.info("[LABEL_EXPANSION] Step 6 complete: %d TA-I score row(s)", len(score_rows))
         except Exception:
             logger.exception("[LABEL_EXPANSION] Step 6 failed for '%s'", molecule_name)
+
+        if no_secondary_indications:
+            # No Secondary indications exist for this drug at all, so
+            # score_rows is necessarily empty and nothing was pushed to
+            # LE_SCORE_CALCULATION_TABLE / LABEL_EXPANSION_OPPORTUNITY_TABLE
+            # above. Push a minimal row to each anyway - drug_name and
+            # final_score = 0, every other column left null - so the drug
+            # still shows up in both tables rather than being absent.
+            logger.info(
+                "[LABEL_EXPANSION] Step 6: No secondary indications for '%s' — pushing a "
+                "Final Score = 0 row to LE_SCORE_CALCULATION_TABLE and "
+                "LABEL_EXPANSION_OPPORTUNITY_TABLE", molecule_name,
+            )
+            try:
+                zero_row = {"drug_name": molecule_name, "final_score": 0.0}
+                push_score_calculation([zero_row])
+                push_label_expansion_opportunity([zero_row])
+            except Exception:
+                logger.exception(
+                    "[LABEL_EXPANSION] Step 6: failed to push the Final Score = 0 row for '%s'",
+                    molecule_name,
+                )
     else:
         logger.info("[LABEL_EXPANSION] Step 6: Skipped (LE_RUN_OT_MAPPING=False)")
 
     # ── Step 7: Generate rationale and PDF report, upload to GCS ────────────
+    # ``no_secondary_indications`` (computed above, before Step 6) is True
+    # only when this drug has ZERO Secondary-classified rows in LE_TABLE.
+    # In that case there is nothing for Step 6 to score (score_rows is
+    # necessarily empty too), but we still want a rationale/report
+    # explaining that - and a Final Score of 0 - rather than silently
+    # skipping Step 7 the way we do when score_rows is empty for some
+    # OTHER reason (e.g. secondary indications exist but none of them
+    # resolved to an Open Targets disease yet).
+    report_data = None
     rationale = None
     rationale_payload = None
     pdf_bytes = None
@@ -380,8 +437,15 @@ def label_expansion(molecule_name: str | None = None) -> dict:
     report_archive_gcs_uri = None
     cache_gcs_uri = None
     top_final_score = None
-    if LE_GENERATE_REPORT and LE_RUN_OT_MAPPING and score_rows:
-        logger.info("[LABEL_EXPANSION] Step 7: Generate rationale and PDF report")
+    if LE_GENERATE_REPORT and LE_RUN_OT_MAPPING and (score_rows or no_secondary_indications):
+        if no_secondary_indications:
+            logger.info(
+                "[LABEL_EXPANSION] Step 7: No secondary indications for '%s' — generating a "
+                "'no secondary indications yet' rationale/report and recording Final Score = 0",
+                molecule_name,
+            )
+        else:
+            logger.info("[LABEL_EXPANSION] Step 7: Generate rationale and PDF report")
         try:
             report_data = {"drug_name": molecule_name, "score_rows": score_rows, "merged_rows": merged_rows}
             rationale, rationale_payload = generate_label_expansion_rationale(report_data)
@@ -406,12 +470,17 @@ def label_expansion(molecule_name: str | None = None) -> dict:
                 )
 
             try:
-                final_scores = [
-                    r.get("final_score")
-                    for r in score_rows
-                    if isinstance(r, dict) and r.get("final_score") is not None
-                ]
-                top_final_score = max(final_scores) if final_scores else None
+                if no_secondary_indications:
+                    # No label-expansion candidates exist for this drug yet -
+                    # record a Final Score of 0 rather than leaving it null.
+                    top_final_score = 0.0
+                else:
+                    final_scores = [
+                        r.get("final_score")
+                        for r in score_rows
+                        if isinstance(r, dict) and r.get("final_score") is not None
+                    ]
+                    top_final_score = max(final_scores) if final_scores else None
                 append_dimension_score_to_bigquery(
                     molecule_name=molecule_name,
                     dimension_name=LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
@@ -476,3 +545,8 @@ def label_expansion(molecule_name: str | None = None) -> dict:
         len(score_rows),
     )
     return output
+
+
+# No __main__ block: this module has no default drug and takes no
+# command-line input. Import label_expansion and call it with a drug name
+# instead (see module docstring) - e.g. from a notebook or another script.
