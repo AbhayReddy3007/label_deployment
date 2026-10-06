@@ -16,7 +16,7 @@ Runs the full label-expansion pipeline for exactly one drug:
 **Score Calculation (Step 6) — Secondary indications only:**
     6.  Select the best trial per TA-I, compute Final Score, push to BQ.
 
-``label_expansion(drug_name)`` takes only the drug/molecule name.
+``label_expansion(molecule_name)`` takes only the drug/molecule name.
 
 Two options come from ``medical_potential/config.py``:
 
@@ -33,10 +33,11 @@ The remaining pipeline options are local constants defined just below the
 imports in this file (``LE_TARGET_ENSEMBL_IDS``, ``LE_RUN_OT_MAPPING``,
 ``LE_GENERATE_REPORT``) — edit them there directly.
 
-``DRUG_NAME`` is also defined locally in this file (not in config.py) as
-the single source every other module in this package imports its own
-default drug name from (for their standalone/testing entry points -
-label_expansion() itself always requires an explicit drug_name argument).
+There is no module-level default drug name anywhere in this package.
+Every function that needs a drug name requires it as an explicit
+argument; ``label_expansion(molecule_name)`` is the only place a drug name
+is provided, and it is threaded down through every submodule call from
+there.
 
 Set ``START_FROM`` to skip earlier stages entirely (e.g. re-run only
 indication mapping + scoring against a ``LE_TABLE`` that's already
@@ -63,6 +64,7 @@ import logging
 
 from medical_potential.config import (
     LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
+    OT_MOA_TABLE,
     START_FROM,
 )
 from medical_potential.gcp_utils import (
@@ -70,20 +72,6 @@ from medical_potential.gcp_utils import (
     upload_dimension_payload_cache_to_gcs,
     upload_dimension_report_pdf_to_gcs,
 )
-
-# ==============================
-# DEFAULT DRUG NAME (this is the entry point — every other module in this
-# package imports DRUG_NAME from here instead of from config.py)
-# ==============================
-# NOTE: defined here, BEFORE the submodule imports below, on purpose. Those
-# submodules (trial_analyser, web_analyser, fda_fetcher, moa_mapping,
-# indication_mapping, trial_selector, score_calculator, data_fetcher) import
-# DRUG_NAME back from this module. Since this module is still being
-# imported when those submodule imports run, DRUG_NAME must already be
-# defined by that point or those imports will fail. It is only a default
-# for those submodules' own standalone functions - label_expansion() itself
-# always requires an explicit drug_name argument and never uses this value.
-DRUG_NAME = "Semaglutide"
 
 from .bq_utils import merge_results, push_to_bigquery
 from .generate_report_and_rationale import (
@@ -93,7 +81,7 @@ from .generate_report_and_rationale import (
 from .indication_extractor import analyse_trials, analyse_web, analyse_fda
 from .indication_extractor.utils import filter_scorable_indications
 from .ot_mapping import run_moa_mapping, run_indication_mapping
-from .ot_mapping.ot_utils import OT_MOA_TABLE, fetch_existing_mappings
+from .ot_mapping.ot_utils import fetch_existing_mappings
 from .scoring import run_score_calculation
 from .scoring.data_fetcher import fetch_le_rows
 
@@ -129,10 +117,10 @@ LE_RUN_OT_MAPPING = True
 LE_GENERATE_REPORT = True
 
 
-def label_expansion(drug_name: str) -> dict:
+def label_expansion(molecule_name: str | None = None) -> dict:
     """Run the full Label Expansion Opportunity pipeline for one drug.
 
-    Takes only ``drug_name``. ``START_FROM`` comes from
+    Takes only ``molecule_name``. ``START_FROM`` comes from
     ``medical_potential/config.py``; ``LE_TARGET_ENSEMBL_IDS``,
     ``LE_RUN_OT_MAPPING``, and ``LE_GENERATE_REPORT`` are local constants
     defined near the top of this file (see module docstring).
@@ -179,7 +167,9 @@ def label_expansion(drug_name: str) -> dict:
             (from config). Runs only if score rows exist.
 
     Args:
-        drug_name: The drug / molecule name (e.g. "Semaglutide").
+        molecule_name: The drug / molecule name (e.g. "Semaglutide"). Required -
+            raises ``ValueError`` if omitted/``None``, ``TypeError`` if it's
+            not a non-empty string.
 
     ``START_FROM`` (in ``medical_potential/config.py``) controls which stage
     to start at - skips every stage before it, reusing whatever is already
@@ -202,16 +192,22 @@ def label_expansion(drug_name: str) -> dict:
     Returns:
         dict with keys: ``drug_name``, ``merged_rows``, ``moa_mappings``,
         ``indication_mappings``, ``score_rows``, ``rationale``,
-        ``report_content``, ``report_gcs_uri`` (the ``gs://`` URI of the
+        ``rationale_payload``, ``report_content``, ``report_payload``,
+        ``top_final_score``, ``report_gcs_uri`` (the ``gs://`` URI of the
         uploaded PDF, or ``None``), ``report_archive_gcs_uri`` (the
         ``gs://`` URI of the timestamped archived PDF copy, or ``None``),
-        ``cache_gcs_uri`` (the ``gs://`` URI of the uploaded JSON cache, or
-        ``None``). The raw PDF bytes are not included - fetch the PDF from
-        ``report_gcs_uri`` if needed.
+        and ``cache_gcs_uri`` (the ``gs://`` URI of the uploaded final output
+        payload, or ``None``). The raw PDF bytes are not included - fetch the
+        PDF from ``report_gcs_uri`` if needed.
     """
-    if not isinstance(drug_name, str) or not drug_name.strip():
+    if molecule_name is None:
+        raise ValueError(
+            "label_expansion() requires a molecule_name argument - none was provided. "
+            'Call it as label_expansion("Semaglutide").'
+        )
+    if not isinstance(molecule_name, str) or not molecule_name.strip():
         raise TypeError(
-            f"label_expansion() accepts exactly one drug name (str), got: {drug_name!r}"
+            f"label_expansion() accepts exactly one molecule name (str), got: {molecule_name!r}"
         )
     if START_FROM not in PIPELINE_STAGES:
         raise ValueError(
@@ -221,7 +217,7 @@ def label_expansion(drug_name: str) -> dict:
 
     logger.info(
         "[LABEL_EXPANSION] Starting Label Expansion Opportunity pipeline for '%s' (START_FROM=%r)",
-        drug_name, START_FROM,
+        molecule_name, START_FROM,
     )
 
     # ── Steps 1-3: Indication Discovery ─────────────────────────────────────
@@ -229,28 +225,28 @@ def label_expansion(drug_name: str) -> dict:
         logger.info(
             "[LABEL_EXPANSION] Steps 1-3: Skipped (START_FROM=%r) — reusing indications "
             "already in LE_TABLE for '%s'",
-            START_FROM, drug_name,
+            START_FROM, molecule_name,
         )
-        merged_rows = fetch_le_rows(drug_name)
+        merged_rows = fetch_le_rows(molecule_name)
         n_primary = sum(1 for r in merged_rows if (r.get("indication_type") or "").lower() == "primary")
         n_secondary = sum(1 for r in merged_rows if (r.get("indication_type") or "").lower() == "secondary")
         logger.info(
             "[LABEL_EXPANSION] Found %d existing row(s) in LE_TABLE for '%s' (%d Primary + %d Secondary)",
-            len(merged_rows), drug_name, n_primary, n_secondary,
+            len(merged_rows), molecule_name, n_primary, n_secondary,
         )
     else:
         # ── Step 1: Module 1 — Trial Analyser ──────────────────────────────
         logger.info("[LABEL_EXPANSION] Step 1: Extract indications from clinical trials (trial_analyser)")
-        trial_rows = analyse_trials(drug_name)
+        trial_rows = analyse_trials(molecule_name)
         logger.info("[LABEL_EXPANSION] Step 1 complete: %d trial-sourced row(s)", len(trial_rows))
 
         # ── Step 1b: Module 3 — FDA Fetcher ────────────────────────────────
         logger.info("[LABEL_EXPANSION] Step 1b: Fetch FDA-approved indications (fda_fetcher)")
         try:
-            fda_rows = analyse_fda(drug_name)
+            fda_rows = analyse_fda(molecule_name)
             logger.info("[LABEL_EXPANSION] Step 1b complete: %d FDA row(s)", len(fda_rows))
         except Exception:
-            logger.exception("[LABEL_EXPANSION] Step 1b failed for '%s'", drug_name)
+            logger.exception("[LABEL_EXPANSION] Step 1b failed for '%s'", molecule_name)
             fda_rows = []
 
         # Combine trial + FDA rows — both are data_source="Trials"
@@ -258,14 +254,14 @@ def label_expansion(drug_name: str) -> dict:
 
         # ── Step 2: Module 2 — Web Analyser ────────────────────────────────
         logger.info("[LABEL_EXPANSION] Step 2: Extract indications from web sources (web_analyser)")
-        web_rows = analyse_web(drug_name)
+        web_rows = analyse_web(molecule_name)
         logger.info("[LABEL_EXPANSION] Step 2 complete: %d web-sourced row(s)", len(web_rows))
 
         # ── Step 3: Filter non-scorable indications, merge & push to BigQuery ──
         if not all_trial_rows and not web_rows:
             logger.warning(
                 "[LABEL_EXPANSION] All modules returned no results for '%s' — nothing to push",
-                drug_name,
+                molecule_name,
             )
             merged_rows = []
         else:
@@ -298,10 +294,10 @@ def label_expansion(drug_name: str) -> dict:
     if LE_RUN_OT_MAPPING and stage_index <= PIPELINE_STAGES.index("moa_mapping"):
         logger.info("[LABEL_EXPANSION] Step 4: Resolve MOA(s) to Open Targets target names")
         try:
-            moa_mappings = run_moa_mapping(drug_name=drug_name)
+            moa_mappings = run_moa_mapping(drug_name=molecule_name)
             logger.info("[LABEL_EXPANSION] Step 4 complete: %d MOA mapping(s)", len(moa_mappings))
         except Exception:
-            logger.exception("[LABEL_EXPANSION] Step 4 failed for '%s'", drug_name)
+            logger.exception("[LABEL_EXPANSION] Step 4 failed for '%s'", molecule_name)
     elif LE_RUN_OT_MAPPING:
         logger.info(
             "[LABEL_EXPANSION] Step 4: Skipped (START_FROM=%r) — reading target Ensembl ID(s) "
@@ -318,7 +314,7 @@ def label_expansion(drug_name: str) -> dict:
                 "[LABEL_EXPANSION] OT_MOA_TABLE has no existing mapping(s) for '%s' — "
                 "Step 5 will have no target Ensembl IDs for Path A unless "
                 "LE_TARGET_ENSEMBL_IDS is set explicitly",
-                drug_name,
+                molecule_name,
             )
     else:
         logger.info("[LABEL_EXPANSION] Step 4: Skipped (LE_RUN_OT_MAPPING=False)")
@@ -343,7 +339,7 @@ def label_expansion(drug_name: str) -> dict:
         logger.info("[LABEL_EXPANSION] Step 5: Resolve Secondary indications to OT disease names")
         try:
             indication_mappings = run_indication_mapping(
-                drug_name=drug_name,
+                drug_name=molecule_name,
                 target_ensembl_ids=effective_target_ids,
                 secondary_only=True,
             )
@@ -352,7 +348,7 @@ def label_expansion(drug_name: str) -> dict:
                 len(indication_mappings),
             )
         except Exception:
-            logger.exception("[LABEL_EXPANSION] Step 5 failed for '%s'", drug_name)
+            logger.exception("[LABEL_EXPANSION] Step 5 failed for '%s'", molecule_name)
     elif LE_RUN_OT_MAPPING:
         logger.info(
             "[LABEL_EXPANSION] Step 5: Skipped (START_FROM=%r) — reusing indications "
@@ -367,24 +363,27 @@ def label_expansion(drug_name: str) -> dict:
     if LE_RUN_OT_MAPPING:
         logger.info("[LABEL_EXPANSION] Step 6: Compute label-expansion scores (Secondary only)")
         try:
-            score_rows = run_score_calculation(drug_name=drug_name, push=True, secondary_only=True)
+            score_rows = run_score_calculation(drug_name=molecule_name, push=True, secondary_only=True)
             logger.info("[LABEL_EXPANSION] Step 6 complete: %d TA-I score row(s)", len(score_rows))
         except Exception:
-            logger.exception("[LABEL_EXPANSION] Step 6 failed for '%s'", drug_name)
+            logger.exception("[LABEL_EXPANSION] Step 6 failed for '%s'", molecule_name)
     else:
         logger.info("[LABEL_EXPANSION] Step 6: Skipped (LE_RUN_OT_MAPPING=False)")
 
     # ── Step 7: Generate rationale and PDF report, upload to GCS ────────────
     rationale = None
+    rationale_payload = None
     pdf_bytes = None
     report_content = None
+    report_payload = None
     report_gcs_uri = None
     report_archive_gcs_uri = None
     cache_gcs_uri = None
+    top_final_score = None
     if LE_GENERATE_REPORT and LE_RUN_OT_MAPPING and score_rows:
         logger.info("[LABEL_EXPANSION] Step 7: Generate rationale and PDF report")
         try:
-            report_data = {"drug_name": drug_name, "score_rows": score_rows, "merged_rows": merged_rows}
+            report_data = {"drug_name": molecule_name, "score_rows": score_rows, "merged_rows": merged_rows}
             rationale, rationale_payload = generate_label_expansion_rationale(report_data)
             pdf_bytes, report_content, report_payload = generate_label_expansion_report_bytes(report_data)
             logger.info(
@@ -394,25 +393,16 @@ def label_expansion(drug_name: str) -> dict:
 
             try:
                 report_gcs_uri, report_archive_gcs_uri = upload_dimension_report_pdf_to_gcs(
-                    pdf_bytes, drug_name, LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
-                )
-                cache_gcs_uri = upload_dimension_payload_cache_to_gcs(
-                    {
-                        "rationale": rationale,
-                        "rationale_payload": rationale_payload,
-                        "report_content": report_content,
-                        "report_payload": report_payload,
-                    },
-                    drug_name, LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
+                    pdf_bytes, molecule_name, LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
                 )
                 logger.info(
-                    "[LABEL_EXPANSION] Step 7: report -> %s (archived: %s), cache -> %s",
-                    report_gcs_uri, report_archive_gcs_uri, cache_gcs_uri,
+                    "[LABEL_EXPANSION] Step 7: report -> %s (archived: %s)",
+                    report_gcs_uri, report_archive_gcs_uri,
                 )
             except Exception:
                 logger.exception(
-                    "[LABEL_EXPANSION] Step 7: GCS upload failed for '%s' (report/rationale were still generated)",
-                    drug_name,
+                    "[LABEL_EXPANSION] Step 7: report GCS upload failed for '%s' (report/rationale were still generated)",
+                    molecule_name,
                 )
 
             try:
@@ -423,7 +413,7 @@ def label_expansion(drug_name: str) -> dict:
                 ]
                 top_final_score = max(final_scores) if final_scores else None
                 append_dimension_score_to_bigquery(
-                    molecule_name=drug_name,
+                    molecule_name=molecule_name,
                     dimension_name=LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
                     score=top_final_score,
                     rationale=rationale,
@@ -434,41 +424,55 @@ def label_expansion(drug_name: str) -> dict:
                 )
             except Exception:
                 logger.exception(
-                    "[LABEL_EXPANSION] Step 7: failed to append dimension score for '%s'", drug_name,
+                    "[LABEL_EXPANSION] Step 7: failed to append dimension score for '%s'", molecule_name,
                 )
         except Exception:
-            logger.exception("[LABEL_EXPANSION] Step 7 failed for '%s'", drug_name)
+            logger.exception("[LABEL_EXPANSION] Step 7 failed for '%s'", molecule_name)
     elif LE_GENERATE_REPORT and LE_RUN_OT_MAPPING and not score_rows:
         logger.info("[LABEL_EXPANSION] Step 7: Skipped — no score rows to report on")
     else:
         logger.info("[LABEL_EXPANSION] Step 7: Skipped (LE_GENERATE_REPORT=False)")
 
-    # ── Done ───────────────────────────────────────────────────────────────
+    # ── Final output payload and cache upload ───────────────────────────────
     output = {
-        "drug_name": drug_name,
+        "drug_name": molecule_name,
         "merged_rows": merged_rows,
         "moa_mappings": moa_mappings,
         "indication_mappings": indication_mappings,
         "score_rows": score_rows,
+        "report_data": report_data,
         "rationale": rationale,
+        "rationale_payload": rationale_payload,
         "report_content": report_content,
+        "report_payload": report_payload,
+        "top_final_score": top_final_score,
         "report_gcs_uri": report_gcs_uri,
         "report_archive_gcs_uri": report_archive_gcs_uri,
         "cache_gcs_uri": cache_gcs_uri,
     }
 
+    try:
+        logger.info("[LABEL_EXPANSION] Uploading final output payload to GCS")
+        cache_gcs_uri = upload_dimension_payload_cache_to_gcs(
+            output,
+            molecule_name,
+            LABEL_EXPANSION_OPPORTUNITY_DIMENSION_NAME,
+        )
+        output["cache_gcs_uri"] = cache_gcs_uri
+        logger.info("[LABEL_EXPANSION] Output payload cache -> %s", cache_gcs_uri)
+    except Exception:
+        logger.exception(
+            "[LABEL_EXPANSION] Output payload GCS upload failed for '%s'",
+            molecule_name,
+        )
+
     logger.info(
         "[LABEL_EXPANSION] Pipeline complete for '%s': "
         "%d indication row(s), %d MOA mapping(s), %d indication mapping(s), %d score row(s)",
-        drug_name,
+        molecule_name,
         len(merged_rows),
         len(moa_mappings),
         len(indication_mappings),
         len(score_rows),
     )
     return output
-
-
-# No __main__ block: this module has no default drug and takes no
-# command-line input. Import label_expansion and call it with a drug name
-# instead (see module docstring) - e.g. from a notebook or another script.
