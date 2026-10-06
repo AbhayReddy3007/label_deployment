@@ -3,8 +3,8 @@
 Holds everything ``trial_analyser.py`` (Module 1) and ``web_analyser.py``
 (Module 2) both need but that isn't specific to either one:
 
-- the Gemini client and a resilient ``gemini_generate()`` wrapper
-  (Search grounding, retries with backoff, fallback to non-grounded calls)
+- a resilient ``gemini_generate()`` wrapper around the shared Gemini transport
+    (Search grounding, retries, fallback to non-grounded calls)
 - ``extract_json()`` to reliably parse JSON out of a model response
 - ``SECONDARY_INDICATION_CRITERIA``, the shared prompt text defining what
   counts as a genuine label-expansion indication
@@ -16,16 +16,11 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import threading
-import time
-
-from dotenv import load_dotenv
-from google import genai
-from google.genai import types
 
 from medical_potential.config import GEMINI_FLASH_PREVIEW_MODEL
+from medical_potential.gemini_utils import gemini_api_call
 
 logger = logging.getLogger(__name__)
 
@@ -53,67 +48,8 @@ PROCESS_INDICATIONS = False
 # ==============================
 # BATCHING CONSTANTS
 # ==============================
-TRIALS_PER_CALL = 1
-INDICATIONS_PER_CALL = 20
-
-# ==============================
-# GEMINI CLIENT
-# ==============================
-load_dotenv()
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY not found.")
-
-gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-
-GEMINI_MAX_RETRIES = 4
-GEMINI_BASE_DELAY_SECONDS = 5
-# On an empty (non-erroring) response, retry the SAME config this many
-# times in total before giving up on it (2 = one retry, as instructed).
-# Bounded well under GEMINI_MAX_RETRIES since transient-error backoff and
-# empty-response retry are different concerns with different costs.
-GEMINI_EMPTY_RETRY_ATTEMPTS = 2
-
-
-def _safe_response_text(resp) -> str:
-    """Safely extract text from a Gemini response.
-
-    With Google Search grounding the simple ``resp.text`` property can be
-    None or raise, so this walks the full candidates -> parts tree.
-    """
-    try:
-        if resp.text is not None:
-            return resp.text.strip()
-    except Exception:
-        pass
-
-    texts: list[str] = []
-    try:
-        for candidate in resp.candidates or []:
-            try:
-                parts = candidate.content.parts
-            except Exception:
-                continue
-            for part in parts or []:
-                text = getattr(part, "text", None)
-                if text:
-                    texts.append(text.strip())
-    except Exception:
-        pass
-
-    return "\n".join(texts)
-
-
-def _is_transient(exc: Exception) -> bool:
-    err = str(exc).lower()
-    return any(
-        k in err
-        for k in (
-            "503", "429", "unavailable", "overloaded", "resource exhausted",
-            "rate limit", "deadline exceeded", "connection", "timeout", "502", "500",
-        )
-    )
-
+TRIALS_PER_CALL = 6
+INDICATIONS_PER_CALL = 10
 
 def gemini_generate(
     prompt: str,
@@ -134,61 +70,37 @@ def gemini_generate(
     in which case an empty/failed grounded response is left empty rather
     than retried without grounding.
     """
-    configs = []
+    configs: list[bool] = []
     if use_search:
-        configs.append(
-            types.GenerateContentConfig(
-                temperature=0,
-                tools=[types.Tool(google_search=types.GoogleSearch())],
-                system_instruction=system_instruction or "Return ONLY valid JSON.",
-            )
-        )
+        configs.append(True)
     if not use_search or allow_ungrounded_fallback:
-        configs.append(
-            types.GenerateContentConfig(
-                temperature=0,
-                system_instruction=system_instruction or "Return ONLY valid JSON.",
-            )
-        )
+        configs.append(False)
 
     last_err: Exception | None = None
-    for i, cfg in enumerate(configs):
-        config_label = "Search grounding" if i == 0 and use_search else "config"
-        for attempt in range(GEMINI_MAX_RETRIES):
-            try:
-                resp = gemini_client.models.generate_content(
-                    model=GEMINI_FLASH_PREVIEW_MODEL, contents=prompt, config=cfg,
+    for i, use_search_config in enumerate(configs):
+        try:
+            text = gemini_api_call(
+                prompt,
+                model=GEMINI_FLASH_PREVIEW_MODEL,
+                temperature=0,
+                google_search=use_search_config,
+                system_instruction=system_instruction or "Return ONLY valid JSON.",
+            )
+            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
+            if text:
+                return text
+        except Exception as exc:
+            last_err = exc
+            if i == 0 and len(configs) > 1:
+                logger.info("[UTILS] Error with Search grounding (%s) — trying without grounding", exc)
+                continue
+            if i == 0 and not allow_ungrounded_fallback:
+                logger.warning(
+                    "[UTILS] Error with Search grounding (%s) and ungrounded fallback disabled - leaving empty",
+                    exc,
                 )
-                text = _safe_response_text(resp)
-                text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
-                if text:
-                    return text
-                # Empty (non-erroring) response - retry the SAME config
-                # once before giving up on it.
-                if attempt < GEMINI_EMPTY_RETRY_ATTEMPTS - 1:
-                    logger.warning(
-                        "[UTILS] Empty response with %s (attempt %d/%d) — retrying same config",
-                        config_label, attempt + 1, GEMINI_EMPTY_RETRY_ATTEMPTS,
-                    )
-                    continue
-                break  # empty-response retries exhausted — try next config (if any)
-            except Exception as exc:
-                last_err = exc
-                if _is_transient(exc) and attempt < GEMINI_MAX_RETRIES - 1:
-                    delay = GEMINI_BASE_DELAY_SECONDS * (2**attempt)
-                    logger.warning("[UTILS] %s — retrying in %ss (%d/%d)", exc, delay, attempt + 1, GEMINI_MAX_RETRIES)
-                    time.sleep(delay)
-                elif i == 0 and len(configs) > 1:
-                    logger.info("[UTILS] Error with Search grounding (%s) — trying without grounding", exc)
-                    break
-                elif i == 0 and not allow_ungrounded_fallback:
-                    logger.warning(
-                        "[UTILS] Error with Search grounding (%s) and ungrounded fallback disabled - leaving empty",
-                        exc,
-                    )
-                    return ""
-                else:
-                    raise
+                return ""
+            raise
         if i == 0 and len(configs) > 1:
             logger.info("[UTILS] Empty/failed response with Search grounding — retrying without grounding")
         elif i == 0 and not allow_ungrounded_fallback:
