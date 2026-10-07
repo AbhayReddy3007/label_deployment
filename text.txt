@@ -1,32 +1,33 @@
----------------------------------------------------------------------------
-ImportError                               Traceback (most recent call last)
-Cell In[2], line 1
-----> 1 from medical_potential.label_expansion_opportunity.label_expansion_opportunity import label_expansion_opportunity
-
-File ~\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\__init__.py:20
-      1 """Label Expansion Opportunity pillar.
-      2 
-      3 Re-exports the single entry-point ``label_expansion`` for external callers.
-   (...)     17 steps and pushes results to BigQuery.
-     18 """
----> 20 from .label_expansion_opportunity import label_expansion
-     22 __all__ = ["label_expansion"]
-
-File ~\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\label_expansion_opportunity\label_expansion_opportunity.py:68
-     61 from medical_potential.gcp_utils import (
-     62     append_dimension_score_to_bigquery,
-     63     upload_dimension_payload_cache_to_gcs,
-     64     upload_dimension_report_pdf_to_gcs,
-     65 )
-     67 from .bq_utils import merge_results, push_to_bigquery
----> 68 from .generate_report_and_rationale import (
-     69     generate_label_expansion_rationale,
-     70     generate_label_expansion_report_bytes,
-     71 )
+[INFO] [LABEL_EXPANSION] Starting Label Expansion Opportunity pipeline for 'Bgm-0504' (START_FROM='moa_mapping')
+[INFO] [LABEL_EXPANSION] Steps 1-3: Skipped (START_FROM='moa_mapping') — reusing indications already in LE_TABLE for 'Bgm-0504'
+[INFO] [DATA_FETCHER] Fetched 60 all glp_indications_table row(s) for 'Bgm-0504' (excluding therapy_area = 'Other'/NULL)
+[INFO] [LABEL_EXPANSION] Found 60 existing row(s) in LE_TABLE for 'Bgm-0504' (49 Primary + 11 Secondary)
+[INFO] [LABEL_EXPANSION] Step 4: Resolve MOA(s) to Open Targets target names
+[INFO] [MOA_MAPPING] Starting MOA mapping for 'Bgm-0504'
+[INFO] [MOA_MAPPING] Fetched 2 MOA(s) for 'Bgm-0504': ['Gastric Inhibitory Polypeptide Receptor Agonist', 'Glucagon Like Peptide 1 Receptor Agonist']
+[INFO] [MOA_MAPPING] 2 MOA(s) total, 2 already resolved, 0 new to resolve
+[INFO] [OT_UTILS] No new mappings to push to ot_moa_mapping — skipping.
+[INFO] [MOA_MAPPING] Completed. 2 mapping(s) for 'Bgm-0504'
+[INFO] [LABEL_EXPANSION] Step 4 complete: 2 MOA mapping(s)
+[WARNING] [LABEL_EXPANSION] No Ensembl ID resolved from MOA mapping — Step 5 will fall back to OT text search only (Path B)
+[INFO] [LABEL_EXPANSION] Step 5: Resolve Secondary indications to OT disease names
+[INFO] [IND_MAPPING] Starting indication mapping for 'Bgm-0504'
+[INFO] [IND_MAPPING] Fetched 10 Secondary indication(s) for 'Bgm-0504' from glp_indications_table
+[INFO] [IND_MAPPING] 10 indication(s) total, 10 already resolved (non-null), 0 to resolve (new + previously null)
+[INFO] [IND_MAPPING] All indications already resolved — skipping resolution
+[INFO] [LABEL_EXPANSION] Step 5 complete: 10 indication mapping(s)
+[INFO] [LABEL_EXPANSION] Step 6: Compute label-expansion scores (Secondary only)
+[INFO] [DATA_FETCHER] Fetched 11 Secondary glp_indications_table row(s) for 'Bgm-0504' (excluding therapy_area = 'Other'/NULL)
+[INFO] [MOA_MAPPING] Fetched 2 MOA(s) for 'Bgm-0504': ['Gastric Inhibitory Polypeptide Receptor Agonist', 'Glucagon Like Peptide 1 Receptor Agonist']
+[INFO] [DATA_FETCHER] Resolved 0 target Ensembl ID(s) for 'Bgm-0504' from ot_moa_mapping: []
+[WARNING] [DATA_FETCHER] No target Ensembl ID(s) resolved for 'Bgm-0504' - association_score will be unavailable for all rows. Ensure Step 4 (moa_mapping) has run for this drug first.
+[INFO] [DATA_FETCHER] 1/5 trial row(s) need enrichment: ['CTR20250891']
+[INFO] [DATA_FETCHER] data_fetched_le: found 1/1 trial(s) already cached - skipping re-fetch for those
 ...
-     24     PROCESS_INDICATIONS,
-   (...)     29     gemini_generate_with_timeout,
-     30 )
-
-ImportError: cannot import name 'DRUG_NAME' from 'medical_potential.config' (C:\Users\P90022569\Downloads\clinical_efficacy\drl-cognito-ai\medical_potential\config.py)
+[INFO] AFC is enabled with max remote calls: 10.
+[INFO] HTTP Request: POST https://aiplatform.googleapis.com/v1/projects/cognito-dev-380506/locations/global/publishers/google/models/gemini-3-flash-preview:generateContent "HTTP/1.1 200 OK"
+[INFO] The user provided project/location will take precedence over the Vertex AI API key from the environment variable.
+[INFO] AFC is enabled with max remote calls: 10.
 Output is truncated. View as a scrollable element or open in a text editor. Adjust cell output settings...
+
+Gemini response served via mode: ON_DEMAND
